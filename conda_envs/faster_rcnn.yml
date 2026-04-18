@@ -1,0 +1,15 @@
+name: projekt-faster-rcnn
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - opencv-python
+  - matplotlib
+  - tqdm
+  - pip:
+      - torch
+      - torchvision
+      - pycocotools
+      # Install Detectron2 with the build that matches your OS, CUDA and PyTorch version.

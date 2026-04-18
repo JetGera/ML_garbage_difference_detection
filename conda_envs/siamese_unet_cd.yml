@@ -1,0 +1,14 @@
+name: projekt-siamese-unet-cd
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - scikit-image
+  - matplotlib
+  - tqdm
+  - pip:
+      - torch
+      - torchvision
