@@ -220,43 +220,27 @@ class LauncherApp(tk.Tk):
         result_file = Path(tempfile.gettempdir()) / "projekt_photo_pairs" / "gui_results" / f"{method_id}_{before_path.stem}_{after_path.stem}_{uuid4().hex}.json"
         result_file.parent.mkdir(parents=True, exist_ok=True)
 
-        current_python = _current_python_executable()
-        if current_python is not None:
-            command = [
-                str(current_python),
-                "-m",
-                "launcher.worker",
-                "--method-id",
-                method_id,
-                "--before",
-                str(before_path),
-                "--after",
-                str(after_path),
-                "--output",
-                str(result_file),
-            ]
-        else:
-            conda_exe = _find_conda_exe()
-            if conda_exe is None:
-                raise RuntimeError("Не найден conda.exe и текущий python не находится внутри conda env.")
+        conda_exe = _find_conda_exe()
+        if conda_exe is None:
+            raise RuntimeError("Не найден conda.exe для запуска метода в его отдельном окружении.")
 
-            command = [
-                str(conda_exe),
-                "run",
-                "-n",
-                spec.env_name,
-                "python",
-                "-m",
-                "launcher.worker",
-                "--method-id",
-                method_id,
-                "--before",
-                str(before_path),
-                "--after",
-                str(after_path),
-                "--output",
-                str(result_file),
-            ]
+        command = [
+            str(conda_exe),
+            "run",
+            "-n",
+            spec.env_name,
+            "python",
+            "-m",
+            "launcher.worker",
+            "--method-id",
+            method_id,
+            "--before",
+            str(before_path),
+            "--after",
+            str(after_path),
+            "--output",
+            str(result_file),
+        ]
         completed = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8")
 
         if not result_file.exists():

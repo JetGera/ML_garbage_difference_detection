@@ -8,23 +8,85 @@ from uuid import uuid4
 import cv2
 import numpy as np
 
+# Method 01 (SIFT + RANSAC) config block.
+# `nfeatures`: maximum number of SIFT keypoints to keep.
+# `contrast_threshold`: lower values make SIFT more sensitive to weak features.
+# `clahe_clip_limit`: contrast enhancement strength before feature detection.
+# `clahe_tile_grid`: CLAHE grid size used to normalize local contrast.
+SIFT_CONFIG = {
+	"nfeatures": 75000,
+	"contrast_threshold": 0.02,
+	"clahe_clip_limit": 2.0,
+	"clahe_tile_grid": (8, 8),
+}
+
+# `ratio_test`: Lower ratio test threshold for keeping descriptor matches.
+# `ransac_reproj_threshold`: RANSAC pixel tolerance for homography / affine fitting.
+# `min_matches_for_homography`: minimum good matches needed before estimating homography.
+# `min_overlap_ratio`: minimum overlap area needed to accept aligned canvas.
+# `max_canvas_side`: hard limit for the shared canvas size.
+# `max_perspective_shear`: maximum allowed perspective distortion in homography.
+# `min_homography_area_ratio`: minimum warped area vs. source area accepted as sane.
+# `max_homography_area_ratio`: maximum warped area vs. source area accepted as sane.
+ALIGNMENT_CONFIG = {
+	"ratio_test": 0.75,
+	"ransac_reproj_threshold": 4.0,
+	"min_matches_for_homography": 8,
+	"min_overlap_ratio": 0.2,
+	"max_canvas_side": 8000,
+	"max_perspective_shear": 0.0025,
+	"min_homography_area_ratio": 0.35,
+	"max_homography_area_ratio": 3.0,
+}
+
+# `gaussian_kernel`: blur kernel for smoothing the gray difference map.
+# `morph_kernel`: kernel used for cleanup after thresholding.
+# `morph_open_iterations`: number of opening passes to remove noise.
+# `morph_close_iterations`: number of closing passes to fill small gaps.
+# `min_component_area_px`: minimum absolute connected-component area to keep.
+# `min_component_area_ratio`: minimum component area relative to overlap area.
+# `colormap`: OpenCV colormap used to render the heatmap preview.
+# `min_component_width_px` / `min_component_height_px`: minimum bounding-box
+# dimensions (in pixels) to keep a detected component. Use these to ignore
+# long thin objects like grass/branches by setting e.g. width>=X or height>=Y.
+CHANGE_MAP_CONFIG = {
+	"gaussian_kernel": (5, 5),
+	"morph_kernel": (5, 5),
+	"morph_open_iterations": 1,
+	"morph_close_iterations": 1,
+	"min_component_area_px": 32,
+	"min_component_area_ratio": 0.0005,
+	"min_component_width_px": 0,
+	"min_component_height_px": 0,
+	"colormap": cv2.COLORMAP_INFERNO,
+}
+
+# `max_width`: maximum width of the composed preview image.
+# `max_height`: maximum height of the composed preview image.
+PREVIEW_CONFIG = {
+	# "max_width": 1800,
+	# "max_height": 1200,
+	"max_width": 18000,
+	"max_height": 12000,
+}
+
 try:
-	from .core import AnalysisResult
-	from .methods import get_method_spec
+	from ..core import AnalysisResult
+	from ..methods import get_method_spec
 except ImportError:
 	from core import AnalysisResult
 	from methods import get_method_spec
 
 
 class SiftRansacRunner:
-	RATIO_TEST = 0.75
-	RANSAC_REPROJ_THRESHOLD = 4.0
-	MIN_MATCHES_FOR_HOMOGRAPHY = 8
-	MIN_OVERLAP_RATIO = 0.2
-	MAX_CANVAS_SIDE = 8000
-	MAX_PERSPECTIVE_SHEAR = 0.0025
-	MIN_HOMOGRAPHY_AREA_RATIO = 0.35
-	MAX_HOMOGRAPHY_AREA_RATIO = 3.0
+	RATIO_TEST = ALIGNMENT_CONFIG["ratio_test"]
+	RANSAC_REPROJ_THRESHOLD = ALIGNMENT_CONFIG["ransac_reproj_threshold"]
+	MIN_MATCHES_FOR_HOMOGRAPHY = ALIGNMENT_CONFIG["min_matches_for_homography"]
+	MIN_OVERLAP_RATIO = ALIGNMENT_CONFIG["min_overlap_ratio"]
+	MAX_CANVAS_SIDE = ALIGNMENT_CONFIG["max_canvas_side"]
+	MAX_PERSPECTIVE_SHEAR = ALIGNMENT_CONFIG["max_perspective_shear"]
+	MIN_HOMOGRAPHY_AREA_RATIO = ALIGNMENT_CONFIG["min_homography_area_ratio"]
+	MAX_HOMOGRAPHY_AREA_RATIO = ALIGNMENT_CONFIG["max_homography_area_ratio"]
 
 	def __init__(self, method_id: str):
 		self.method_id = method_id
@@ -338,13 +400,19 @@ class SiftRansacRunner:
 
 	def _create_sift(self):
 		if hasattr(cv2, "SIFT_create"):
-			return cv2.SIFT_create(nfeatures=4000, contrastThreshold=0.02)
+			return cv2.SIFT_create(
+				nfeatures=int(SIFT_CONFIG["nfeatures"]),
+				contrastThreshold=float(SIFT_CONFIG["contrast_threshold"]),
+			)
 		raise RuntimeError(
 			"OpenCV SIFT is unavailable. Install an OpenCV build with SIFT support (for example opencv-contrib-python)."
 		)
 
 	def _enhance_for_features(self, gray: np.ndarray) -> np.ndarray:
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		clahe = cv2.createCLAHE(
+			clipLimit=float(SIFT_CONFIG["clahe_clip_limit"]),
+			tileGridSize=tuple(SIFT_CONFIG["clahe_tile_grid"]),
+		)
 		return clahe.apply(gray)
 
 	def _fallback_alignment_pair(
@@ -479,7 +547,7 @@ class SiftRansacRunner:
 		diff = cv2.absdiff(before_img, aligned_after)
 		diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
 		diff_gray = cv2.bitwise_and(diff_gray, diff_gray, mask=overlap_mask)
-		diff_blur = cv2.GaussianBlur(diff_gray, (5, 5), 0)
+		diff_blur = cv2.GaussianBlur(diff_gray, tuple(CHANGE_MAP_CONFIG["gaussian_kernel"]), 0)
 
 		otsu_threshold, raw_mask = cv2.threshold(
 			diff_blur,
@@ -489,9 +557,9 @@ class SiftRansacRunner:
 		)
 		raw_mask = cv2.bitwise_and(raw_mask, raw_mask, mask=overlap_mask)
 
-		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-		opened = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-		closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=1)
+		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, tuple(CHANGE_MAP_CONFIG["morph_kernel"]))
+		opened = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, kernel, iterations=int(CHANGE_MAP_CONFIG["morph_open_iterations"]))
+		closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=int(CHANGE_MAP_CONFIG["morph_close_iterations"]))
 		cleaned = self._remove_small_connected_components(closed, overlap_mask)
 		cleaned = cv2.bitwise_and(cleaned, cleaned, mask=overlap_mask)
 		return diff_gray, cleaned, float(otsu_threshold)
@@ -500,12 +568,20 @@ class SiftRansacRunner:
 		components = cv2.connectedComponentsWithStats(mask, connectivity=8)
 		num_labels, labels, stats, _ = components
 		valid_pixels = int(np.count_nonzero(overlap_mask))
-		min_area = max(32, int(valid_pixels * 0.0005))
+		min_area = max(
+			int(CHANGE_MAP_CONFIG["min_component_area_px"]),
+			int(valid_pixels * float(CHANGE_MAP_CONFIG["min_component_area_ratio"])),
+		)
+		min_width = int(CHANGE_MAP_CONFIG.get("min_component_width_px", 0))
+		min_height = int(CHANGE_MAP_CONFIG.get("min_component_height_px", 0))
 
 		filtered = np.zeros_like(mask)
 		for label in range(1, num_labels):
 			area = int(stats[label, cv2.CC_STAT_AREA])
-			if area >= min_area:
+			width = int(stats[label, cv2.CC_STAT_WIDTH])
+			height = int(stats[label, cv2.CC_STAT_HEIGHT])
+			# Keep component only if it satisfies area and bounding-box size
+			if area >= min_area and width >= min_width and height >= min_height:
 				filtered[labels == label] = 255
 		return filtered
 
@@ -517,7 +593,7 @@ class SiftRansacRunner:
 		change_mask: np.ndarray,
 		alignment_mode: str,
 	) -> np.ndarray:
-		diff_heat = cv2.applyColorMap(diff_gray, cv2.COLORMAP_INFERNO)
+		diff_heat = cv2.applyColorMap(diff_gray, int(CHANGE_MAP_CONFIG["colormap"]))
 		change_overlay = self._make_change_overlay(before_img, aligned_after, change_mask)
 
 		panel_before = self._annotate_panel(before_img, "Before (aligned frame)")
@@ -528,7 +604,11 @@ class SiftRansacRunner:
 		top = np.hstack([panel_before, panel_after])
 		bottom = np.hstack([panel_diff, panel_mask])
 		grid = np.vstack([top, bottom])
-		return self._resize_if_too_large(grid, max_width=1800, max_height=1200)
+		return self._resize_if_too_large(
+			grid,
+			max_width=int(PREVIEW_CONFIG["max_width"]),
+			max_height=int(PREVIEW_CONFIG["max_height"]),
+		)
 
 	def _make_change_overlay(
 		self,
@@ -562,7 +642,7 @@ class SiftRansacRunner:
 		return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
 
 	def _prepare_output_dir(self, before: Path, after: Path) -> Path:
-		root = Path(__file__).resolve().parent.parent / "results"
+		root = Path(__file__).resolve().parent.parent.parent / "results"
 		pair_name = self._pair_folder_name(before, after)
 		method_name = self._sanitize_folder_component(self.label)
 		timestamp = datetime.now().strftime("%d.%m.%Y %H-%M")

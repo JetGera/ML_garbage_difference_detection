@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 try:
     from .core import AnalysisResult
@@ -130,19 +131,40 @@ class ScoredPlaceholderRunner(AlgorithmRunner):
         return AnalysisResult(self.method_id, self.label, summary, metrics, before, after, preview_text)
 
 
-def create_runner(method_id: str) -> AlgorithmRunner:
+def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
     if method_id == "sift_ransac":
         try:
-            from .sift_ransac import SiftRansacRunner
+            from .method_scripts.sift_ransac import SiftRansacRunner
         except ImportError as exc:
             # Re-raise real dependency import errors (e.g. numpy/cv2) instead of masking them.
             is_relative_import_context_error = "attempted relative import" in str(exc)
-            missing_target_module = getattr(exc, "name", None) in {"sift_ransac", "launcher.sift_ransac"}
+            missing_target_module = getattr(exc, "name", None) in {
+                "sift_ransac",
+                "launcher.sift_ransac",
+                "method_scripts.sift_ransac",
+                "launcher.method_scripts.sift_ransac",
+            }
             if not (is_relative_import_context_error or missing_target_module):
                 raise
-            from sift_ransac import SiftRansacRunner
+            from method_scripts.sift_ransac import SiftRansacRunner
 
         return SiftRansacRunner(method_id)
+    if method_id == "yolov8_seg":
+        try:
+            from .method_scripts.yolov8_seg import YoloV8SegRunner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "yolov8_seg",
+                "launcher.yolov8_seg",
+                "method_scripts.yolov8_seg",
+                "launcher.method_scripts.yolov8_seg",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.yolov8_seg import YoloV8SegRunner
+
+        return YoloV8SegRunner(method_id, **kwargs)
     if method_id == "orb_ransac":
         return DifferenceMapRunner(method_id)
     if method_id not in METHODS:

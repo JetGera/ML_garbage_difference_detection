@@ -5,8 +5,16 @@ dependencies:
   - python=3.11
   - pip
   - numpy
-  - opencv-python
+  - opencv
   - matplotlib
   - tqdm
+  - pillow
+  - seaborn
+  - pycocotools
+  - albumentations
   - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu124
+      - torch==2.6.0+cu124
+      - torchvision==0.21.0+cu124
+      - torchaudio==2.6.0+cu124
       - ultralytics

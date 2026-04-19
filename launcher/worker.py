@@ -31,13 +31,15 @@ def main() -> None:
     parser.add_argument("--before", required=True)
     parser.add_argument("--after", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+    parser.add_argument("--force-cpu", action="store_true")
     args = parser.parse_args()
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        runner = create_runner(args.method_id)
+        runner = create_runner(args.method_id, device=args.device, force_cpu=args.force_cpu)
         result = runner.analyze(Path(args.before), Path(args.after))
         payload = {"ok": True, "result": _serialize_result(result)}
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
