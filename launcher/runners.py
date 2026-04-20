@@ -184,6 +184,22 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.efficientnet_cls import EfficientNetClsRunner
 
         return EfficientNetClsRunner(method_id, **kwargs)
+    if method_id == "changeformer":
+        try:
+            from .method_scripts.changeformer import ChangeformerRunner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "changeformer",
+                "launcher.changeformer",
+                "method_scripts.changeformer",
+                "launcher.method_scripts.changeformer",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.changeformer import ChangeformerRunner
+
+        return ChangeformerRunner(method_id, **kwargs)
     if method_id == "orb_ransac":
         return DifferenceMapRunner(method_id)
     if method_id not in METHODS:
