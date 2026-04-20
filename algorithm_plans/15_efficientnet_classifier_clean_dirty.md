@@ -12,6 +12,7 @@
 1. Те же clean/dirty метки, что и для ResNet.
 2. При необходимости тот же pseudo-label pipeline по `area_ratio`.
 3. Внешние сцены можно использовать для расширения домена и проверки устойчивости.
+4. Для TACO использовать `launcher/train_efficientnet_cls.py --taco-root ...`, который сам собирает clean/dirty crops из аннотаций.
 
 ## 4. Окружение
 1. Легкое PyTorch-окружение.

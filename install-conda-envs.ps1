@@ -52,14 +52,28 @@ $repoRoot = $PSScriptRoot
 $envDir = Join-Path $repoRoot 'conda_envs'
 
 function Get-CondaCommand {
+    if ($env:CONDA_EXE -and (Test-Path $env:CONDA_EXE)) {
+        return $env:CONDA_EXE
+    }
+
     $condaCommand = Get-Command conda -ErrorAction SilentlyContinue
     if ($null -ne $condaCommand) {
         return $condaCommand.Source
     }
 
-    $fallback = 'C:\ProgramData\anaconda3\Scripts\conda.exe'
-    if (Test-Path $fallback) {
-        return $fallback
+    $fallbackCandidates = @(
+        'C:\ProgramData\anaconda3\Scripts\conda.exe'
+        'C:\ProgramData\miniconda3\Scripts\conda.exe'
+        "$env:USERPROFILE\anaconda3\Scripts\conda.exe"
+        "$env:USERPROFILE\miniconda3\Scripts\conda.exe"
+        "$env:LOCALAPPDATA\anaconda3\Scripts\conda.exe"
+        "$env:LOCALAPPDATA\miniconda3\Scripts\conda.exe"
+    )
+
+    foreach ($fallback in $fallbackCandidates) {
+        if ($fallback -and (Test-Path $fallback)) {
+            return $fallback
+        }
     }
 
     throw 'Could not find conda. Put it in PATH or install Anaconda at C:\ProgramData\anaconda3.'

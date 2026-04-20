@@ -31,8 +31,8 @@ YOLOV8_SEG_CONFIG = {
 	"dataset_root": Path(__file__).resolve().parent.parent.parent / "datasets" / "TACO",
 	# Subfolder inside the dataset root where YOLO artifacts are written.
 	"dataset_export_subdir": "yolo_seg",
-	# Name of the source annotation file used to build the YOLO export.
-	"dataset_annotations_name": "annotations.json",
+	# Preferred source annotation files used to build the YOLO export.
+	"dataset_annotations_names": ["annotations.json", "annotations_unofficial.json"],
 	# Single class name used for the exported YOLO segmentation dataset.
 	"dataset_single_class_name": "trash",
 	# Whether the runner should build the YOLO export automatically.
@@ -154,7 +154,7 @@ class YoloV8SegRunner:
 		self.class_filter = class_filter if class_filter is not None else YOLOV8_SEG_CONFIG["class_filter"]
 		self.dataset_root = Path(dataset_root) if dataset_root is not None else Path(YOLOV8_SEG_CONFIG["dataset_root"])
 		self.dataset_export_root = self.dataset_root / str(YOLOV8_SEG_CONFIG["dataset_export_subdir"])
-		self.dataset_annotations_path = self.dataset_root / "data" / str(YOLOV8_SEG_CONFIG["dataset_annotations_name"])
+		self.dataset_annotations_path = self._resolve_taco_annotations_path()
 		self.dataset_single_class_name = str(YOLOV8_SEG_CONFIG["dataset_single_class_name"])
 		self.prepare_taco_export = bool(prepare_taco_export)
 		self.dataset_yaml_path = self.dataset_export_root / "data.yaml"
@@ -470,6 +470,21 @@ class YoloV8SegRunner:
 			self._taco_export_state = self._build_taco_export_state(dry_run=False)
 		return self._taco_export_state
 
+	def _resolve_taco_annotations_path(self) -> Path:
+		annotations_names = YOLOV8_SEG_CONFIG.get("dataset_annotations_names", ["annotations.json"])
+		if isinstance(annotations_names, str):
+			annotations_names = [annotations_names]
+
+		preferred_path: Path | None = None
+		for annotation_name in annotations_names:
+			candidate = self.dataset_root / "data" / str(annotation_name)
+			if preferred_path is None:
+				preferred_path = candidate
+			if candidate.exists():
+				return candidate
+
+		return preferred_path or (self.dataset_root / "data" / "annotations.json")
+
 	def _build_taco_export_state(self, dry_run: bool) -> dict[str, Any]:
 		state: dict[str, Any] = {
 			"source_images": 0,
@@ -479,6 +494,7 @@ class YoloV8SegRunner:
 			"invalid_polygons": 0,
 			"splits": {"train": 0, "val": 0, "test": 0},
 		}
+		self.dataset_annotations_path = self._resolve_taco_annotations_path()
 		if not self.dataset_annotations_path.exists():
 			return state
 

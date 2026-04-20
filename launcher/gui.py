@@ -28,7 +28,25 @@ def _find_conda_exe() -> Path | None:
     conda_env = os.environ.get("CONDA_EXE")
     if conda_env:
         candidates.append(Path(conda_env))
-    candidates.append(Path(r"C:\ProgramData\anaconda3\Scripts\conda.exe"))
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        candidates.append(Path(conda_prefix) / "Scripts" / "conda.exe")
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    candidates.extend(
+        [
+            Path(r"C:\ProgramData\anaconda3\Scripts\conda.exe"),
+            Path(r"C:\ProgramData\miniconda3\Scripts\conda.exe"),
+            Path.home() / "anaconda3" / "Scripts" / "conda.exe",
+            Path.home() / "miniconda3" / "Scripts" / "conda.exe",
+        ]
+    )
+    if local_appdata:
+        candidates.extend(
+            [
+                Path(local_appdata) / "anaconda3" / "Scripts" / "conda.exe",
+                Path(local_appdata) / "miniconda3" / "Scripts" / "conda.exe",
+            ]
+        )
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -133,11 +151,15 @@ class LauncherApp(tk.Tk):
 
         result_frame = ttk.LabelFrame(right, text="Результаты", padding=8)
         result_frame.pack(fill="both", expand=True)
+        result_toolbar = ttk.Frame(result_frame)
+        result_toolbar.pack(fill="x", pady=(0, 6))
+        ttk.Button(result_toolbar, text="Скопировать текст", command=self.copy_results_text).pack(side="left")
         self.result_text = tk.Text(result_frame, wrap="word", height=30)
         scroll = ttk.Scrollbar(result_frame, command=self.result_text.yview)
         self.result_text.configure(yscrollcommand=scroll.set)
         self.result_text.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+        self._install_text_copy_support(self.result_text)
 
     def _make_text_panel(self, parent: ttk.Frame, title: str, row: int, column: int, colspan: int = 1) -> tk.Text:
         frame = ttk.LabelFrame(parent, text=title, padding=8)
@@ -296,6 +318,44 @@ class LauncherApp(tk.Tk):
         self.result_text.delete("1.0", tk.END)
         self.result_text.insert("1.0", text)
 
+    def copy_results_text(self) -> None:
+        if self.result_text is None:
+            return
+        text = self.result_text.get("1.0", tk.END).rstrip()
+        self.clipboard_clear()
+        self.clipboard_append(text)
+
+    def _install_text_copy_support(self, widget: tk.Text | None) -> None:
+        if widget is None:
+            return
+
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label="Copy selected", command=lambda: self._copy_widget_selection(widget))
+        menu.add_command(label="Copy all", command=lambda: self._copy_widget_all(widget))
+
+        def open_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+            return "break"
+
+        widget.bind("<Button-3>", open_menu)
+        widget.bind("<Control-c>", lambda _event: self._copy_widget_selection(widget))
+        widget.bind("<Control-C>", lambda _event: self._copy_widget_selection(widget))
+
+    def _copy_widget_selection(self, widget: tk.Text) -> str:
+        try:
+            text = widget.selection_get()
+        except tk.TclError:
+            text = widget.get("1.0", tk.END).rstrip()
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        return "break"
+
+    def _copy_widget_all(self, widget: tk.Text) -> str:
+        text = widget.get("1.0", tk.END).rstrip()
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        return "break"
+
     def _set_panel_text(self, widget: tk.Text | None, text: str) -> None:
         if widget is None:
             return
@@ -321,15 +381,30 @@ class LauncherApp(tk.Tk):
 
     def _format_result(self, result) -> str:
         method_spec = get_method_spec(result.method_id)
+        cleanup_delta = result.metrics.get("cleanup_delta")
+        cleanup_score = result.metrics.get("cleanup_score")
+        cleanup_block = []
+        if cleanup_delta is not None:
+            cleanup_block.append(f"Cleanup delta: {cleanup_delta}")
+        if cleanup_score is not None:
+            cleanup_block.append(f"Cleanup score: {cleanup_score}")
+
         lines = [
             f"Метод: {result.method_name}",
             f"Conda env: {method_spec.env_name}",
             f"Env file: {method_spec.env_file}",
             f"Кратко: {result.summary}",
             "",
-            "Метрики:",
         ]
+        if cleanup_block:
+            lines.append("Оценка очистки:")
+            for item in cleanup_block:
+                lines.append(f"- {item}")
+            lines.append("")
+        lines.append("Метрики:")
         for key, value in result.metrics.items():
+            if key in {"cleanup_delta", "cleanup_score"}:
+                continue
             lines.append(f"- {key}: {value}")
         if result.preview_image_path is not None:
             lines.extend(["", f"Preview image: {result.preview_image_path}"])

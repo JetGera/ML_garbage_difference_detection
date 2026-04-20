@@ -1,14 +1,14 @@
 name: projekt-resnet-cls
 channels:
-  - conda-forge
+  - defaults
 dependencies:
   - python=3.11
   - pip
-  - numpy
-  - opencv-python
-  - matplotlib
-  - tqdm
   - pip:
+      - numpy
+      - matplotlib
+      - tqdm
+      - timm
+      - opencv-python
       - torch
       - torchvision
-      - timm

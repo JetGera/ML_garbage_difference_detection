@@ -165,8 +165,49 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.yolov8_seg import YoloV8SegRunner
 
         return YoloV8SegRunner(method_id, **kwargs)
+    if method_id == "efficientnet_cls":
+        weights_path = _resolve_latest_efficientnet_checkpoint()
+        if weights_path is not None and "weights_path" not in kwargs:
+            kwargs["weights_path"] = weights_path
+        try:
+            from .method_scripts.efficientnet_cls import EfficientNetClsRunner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "efficientnet_cls",
+                "launcher.efficientnet_cls",
+                "method_scripts.efficientnet_cls",
+                "launcher.method_scripts.efficientnet_cls",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.efficientnet_cls import EfficientNetClsRunner
+
+        return EfficientNetClsRunner(method_id, **kwargs)
     if method_id == "orb_ransac":
         return DifferenceMapRunner(method_id)
     if method_id not in METHODS:
         raise KeyError(f"Unknown method: {method_id}")
     return ScoredPlaceholderRunner(method_id)
+
+
+def _resolve_latest_efficientnet_checkpoint() -> Path | None:
+    training_root = BASE_DIR / "results" / "training"
+    if not training_root.exists():
+        return None
+
+    preferred_checkpoint = training_root / "20260419_195422__efficientnet_taco__110a7f2e" / "best.pt"
+    if preferred_checkpoint.exists():
+        return preferred_checkpoint
+
+    best_candidates = [path for path in training_root.rglob("best.pt") if path.is_file()]
+    if best_candidates:
+        best_candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return best_candidates[0]
+
+    last_candidates = [path for path in training_root.rglob("last.pt") if path.is_file()]
+    if last_candidates:
+        last_candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return last_candidates[0]
+
+    return None
