@@ -216,6 +216,10 @@ def _resolve_latest_efficientnet_checkpoint() -> Path | None:
     if preferred_checkpoint.exists():
         return preferred_checkpoint
 
+    canonical_checkpoint = BASE_DIR / "results" / "models" / "efficientnet" / "best.pt"
+    if canonical_checkpoint.exists():
+        return canonical_checkpoint
+
     best_candidates = [path for path in training_root.rglob("best.pt") if path.is_file()]
     if best_candidates:
         best_candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
