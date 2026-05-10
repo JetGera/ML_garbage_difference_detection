@@ -1,0 +1,54 @@
+{
+  "mode": "eval_only",
+  "weights_in": "results\\models\\efficientnet\\best.pt",
+  "val_loss": 0.468247,
+  "val_metrics": {
+    "accuracy": 0.85,
+    "precision_dirty": 0.8181818181818182,
+    "recall_dirty": 0.9,
+    "f1_dirty": 0.8571428571428572,
+    "roc_auc": 0.91,
+    "tp": 9.0,
+    "tn": 8.0,
+    "fp": 2.0,
+    "fn": 1.0
+  },
+  "metadata": {
+    "dataset_mode": "pair_binary",
+    "train_count": 78,
+    "val_count": 20,
+    "class_counts_train": [
+      39,
+      39
+    ],
+    "clean_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__627a5aba6079\\train\\clean",
+    "dirty_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__627a5aba6079\\train\\dirty",
+    "val_clean_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__627a5aba6079\\val\\clean",
+    "val_dirty_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__627a5aba6079\\val\\dirty",
+    "taco_root": null,
+    "pairs_root": "Garbage Pairs Dataset",
+    "taco_metadata": null,
+    "pair_metadata": {
+      "signature": "627a5aba6079",
+      "pairs_root": "d:\\ML_garbage_difference_detection\\Garbage Pairs Dataset",
+      "split_strategy": "pair_level",
+      "val_fraction": 0.2,
+      "source_pairs": 49,
+      "train_pair_count": 39,
+      "val_pair_count": 10,
+      "train": {
+        "source_pairs": 39,
+        "dirty_samples": 39,
+        "clean_samples": 39,
+        "missing_images": 0
+      },
+      "val": {
+        "source_pairs": 10,
+        "dirty_samples": 10,
+        "clean_samples": 10,
+        "missing_images": 0
+      }
+    }
+  },
+  "output_dir": "results\\training\\20260510_151906__efficientnet_cls__d054e966"
+}
