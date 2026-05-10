@@ -36,9 +36,9 @@ METHOD_SPECS = {
     "bit_like_cd": MethodSpec("BIT-like change detection model", "projekt-bit-like-cd", CONDA_ENV_DIR / "bit_like_cd.yml"),
     "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "changeformer.yml"),
     "open_cd": MethodSpec("Open-CD baseline models", "projekt-open-cd", CONDA_ENV_DIR / "open_cd.yml"),
-    "resnet_cls": MethodSpec("ResNet classifier для чисто/грязно", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
-    "efficientnet_cls": MethodSpec("EfficientNet classifier для чисто/грязно", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
-    "hybrid_score": MethodSpec("Гибридный score", "projekt-hybrid-score", CONDA_ENV_DIR / "hybrid_score.yml"),
+    "resnet_cls": MethodSpec("ResNet classifier for clean/dirty", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
+    "efficientnet_cls": MethodSpec("EfficientNet classifier for clean/dirty", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
+    "hybrid_score": MethodSpec("Hybrid score", "projekt-hybrid-score", CONDA_ENV_DIR / "hybrid_score.yml"),
 }
 
 METHODS = list(METHOD_SPECS)
@@ -89,13 +89,13 @@ class DifferenceMapRunner(AlgorithmRunner):
         after_size = after.stat().st_size
         size_delta = abs(before_size - after_size)
         ratio = round(size_delta / max(before_size, after_size, 1), 4)
-        summary = "Текстовый preview без графических зависимостей."
+        summary = "Text-only preview without graphical dependencies."
         preview_text = (
-            "Метод еще не реализован..\n"
-            f"Файл до: {before.name}\n"
-            f"Файл после: {after.name}\n"
-            f"Размер до: {before_size} bytes\n"
-            f"Размер после: {after_size} bytes\n"
+            "This method has not been implemented yet.\n"
+            f"Before file: {before.name}\n"
+            f"After file: {after.name}\n"
+            f"Before size: {before_size} bytes\n"
+            f"After size: {after_size} bytes\n"
             f"Placeholder change_ratio: {ratio}"
         )
         metrics = {
@@ -114,12 +114,12 @@ class ScoredPlaceholderRunner(AlgorithmRunner):
         before_size = before.stat().st_size
         after_size = after.stat().st_size
         ratio = round(abs(before_size - after_size) / max(before_size, after_size, 1), 4)
-        summary = "Метод еще не реализован."
+        summary = "This method has not been implemented yet."
         preview_text = (
-            f"Метод: {self.label}\n"
-            f"Файл до: {before.name}\n"
-            f"Файл после: {after.name}\n"
-            "Реальная модель еще не подключена.\n"
+            f"Method: {self.label}\n"
+            f"Before file: {before.name}\n"
+            f"After file: {after.name}\n"
+            "The real model has not been connected yet.\n"
             f"Placeholder change_ratio: {ratio}"
         )
         metrics = {

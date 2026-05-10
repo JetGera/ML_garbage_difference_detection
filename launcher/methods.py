@@ -29,9 +29,9 @@ METHOD_SPECS = {
     "bit_like_cd": MethodSpec("BIT-like change detection model", "projekt-bit-like-cd", CONDA_ENV_DIR / "bit_like_cd.yml"),
     "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "changeformer.yml"),
     "open_cd": MethodSpec("Open-CD baseline models", "projekt-open-cd", CONDA_ENV_DIR / "open_cd.yml"),
-    "resnet_cls": MethodSpec("ResNet classifier для чисто/грязно", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
-    "efficientnet_cls": MethodSpec("EfficientNet classifier для чисто/грязно", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
-    "hybrid_score": MethodSpec("Гибридный score", "projekt-hybrid-score", CONDA_ENV_DIR / "hybrid_score.yml"),
+    "resnet_cls": MethodSpec("ResNet classifier for clean/dirty", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
+    "efficientnet_cls": MethodSpec("EfficientNet classifier for clean/dirty", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
+    "hybrid_score": MethodSpec("Hybrid score", "projekt-hybrid-score", CONDA_ENV_DIR / "hybrid_score.yml"),
 }
 
 METHODS = list(METHOD_SPECS)
