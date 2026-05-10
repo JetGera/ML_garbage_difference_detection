@@ -718,6 +718,24 @@ def _to_json_safe(value):
     return value
 
 
+def load_checkpoint(path: Path) -> dict[str, object]:
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, dict) or "state_dict" not in payload:
+        raise RuntimeError(f"Unexpected checkpoint payload in {path}")
+    return payload
+
+
+def apply_checkpoint_args(args: argparse.Namespace, checkpoint: dict[str, object]) -> None:
+    train_args = checkpoint.get("train_args") if isinstance(checkpoint, dict) else None
+    if not isinstance(train_args, dict):
+        train_args = {}
+    args.model_name = str(train_args.get("model_name", checkpoint.get("model_name", args.model_name)))
+    args.image_size = int(train_args.get("image_size", checkpoint.get("image_size", args.image_size)))
+
+
 def build_model(model_name: str, device: torch.device) -> nn.Module:
     model = timm.create_model(model_name, pretrained=True, num_classes=2)
     return model.to(device)
@@ -856,6 +874,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--force-cpu", action="store_true")
+    parser.add_argument("--eval-only", action="store_true", help="Run evaluation on the validation split and skip training")
+    parser.add_argument(
+        "--weights-in",
+        type=Path,
+        default=DEFAULT_CANONICAL_WEIGHTS,
+        help="Checkpoint to load for eval-only (defaults to canonical best.pt)",
+    )
     parser.add_argument("--weights-out", type=Path, default=None, help="Explicit checkpoint path for best.pt")
     parser.add_argument("--canonical-weights-out", type=Path, default=DEFAULT_CANONICAL_WEIGHTS, help="Stable checkpoint path used by the GUI after training")
     args = parser.parse_args()
@@ -885,6 +910,13 @@ def resolve_device(args: argparse.Namespace) -> torch.device:
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
+
+    checkpoint: dict[str, object] | None = None
+    if args.eval_only:
+        if not args.weights_in.exists():
+            raise RuntimeError(f"Checkpoint not found: {args.weights_in}")
+        checkpoint = load_checkpoint(args.weights_in)
+        apply_checkpoint_args(args, checkpoint)
 
     taco_metadata: dict[str, object] | None = None
     pair_metadata: dict[str, object] | None = None
@@ -984,6 +1016,29 @@ def main() -> None:
         "taco_metadata": taco_metadata,
         "pair_metadata": pair_metadata,
     }
+
+    if args.eval_only:
+        if checkpoint is not None:
+            model.load_state_dict(checkpoint["state_dict"], strict=True)
+        val_loss, val_targets, val_probs = evaluate(model, val_loader, criterion, device)
+        val_metrics = binary_metrics(val_targets, val_probs)
+        summary = {
+            "mode": "eval_only",
+            "weights_in": str(args.weights_in),
+            "val_loss": round(val_loss, 6),
+            "val_metrics": _to_json_safe(val_metrics),
+            "metadata": metadata,
+            "output_dir": str(output_dir),
+        }
+        metrics_path = output_dir / "metrics.json"
+        summary_path = output_dir / "summary.json"
+        metrics_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(
+            f"Eval only | val_loss={val_loss:.4f} val_f1_dirty={val_metrics['f1_dirty']:.4f} val_auc={val_metrics['roc_auc']:.4f}"
+        )
+        print(f"Output dir: {output_dir}")
+        return
 
     for epoch in range(1, args.epochs + 1):
         if args.freeze_backbone_epochs > 0 and epoch == args.freeze_backbone_epochs + 1:

@@ -437,6 +437,26 @@ def _to_json_safe(value):
     return value
 
 
+def load_checkpoint(path: Path) -> dict[str, object]:
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, dict) or "state_dict" not in payload:
+        raise RuntimeError(f"Unexpected checkpoint payload in {path}")
+    return payload
+
+
+def apply_checkpoint_args(args: argparse.Namespace, checkpoint: dict[str, object]) -> None:
+    train_args = checkpoint.get("train_args") if isinstance(checkpoint, dict) else None
+    if not isinstance(train_args, dict):
+        train_args = {}
+    args.backbone_name = str(train_args.get("backbone_name", args.backbone_name))
+    args.decoder_channels = int(train_args.get("decoder_channels", args.decoder_channels))
+    args.dropout = float(train_args.get("dropout", args.dropout))
+    args.image_size = int(train_args.get("image_size", args.image_size))
+
+
 def save_checkpoint(path: Path, model: nn.Module, epoch: int, best_score: float, args: argparse.Namespace, extra: dict[str, object]) -> None:
     payload = {
         "epoch": int(epoch),
@@ -483,6 +503,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-cpu", action="store_true")
     parser.add_argument("--limit-train-samples", type=int, default=None, help="Optional cap for smoke tests")
     parser.add_argument("--limit-val-samples", type=int, default=None, help="Optional cap for smoke tests")
+    parser.add_argument("--eval-only", action="store_true", help="Run evaluation on the validation split and skip training")
+    parser.add_argument(
+        "--weights-in",
+        type=Path,
+        default=DEFAULT_CANONICAL_WEIGHTS,
+        help="Checkpoint to load for eval-only (defaults to canonical best.pt)",
+    )
     parser.add_argument("--weights-out", type=Path, default=None, help="Explicit checkpoint path for best.pt")
     parser.add_argument("--canonical-weights-out", type=Path, default=DEFAULT_CANONICAL_WEIGHTS, help="Stable checkpoint path used by the GUI after training")
     args = parser.parse_args()
@@ -512,6 +539,13 @@ def maybe_limit(samples: list[ChangeSample], limit: int | None) -> list[ChangeSa
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
+
+    checkpoint: dict[str, object] | None = None
+    if args.eval_only:
+        if not args.weights_in.exists():
+            raise RuntimeError(f"Checkpoint not found: {args.weights_in}")
+        checkpoint = load_checkpoint(args.weights_in)
+        apply_checkpoint_args(args, checkpoint)
 
     samples = discover_samples(args.dataset_root)
     train_samples, val_samples = split_samples(samples, args.val_fraction, args.seed)
@@ -586,6 +620,29 @@ def main() -> None:
         "image_size": int(args.image_size),
         "device": str(device),
     }
+
+    if args.eval_only:
+        if checkpoint is not None:
+            model.load_state_dict(checkpoint["state_dict"], strict=True)
+        val_loss, val_targets, val_probs = evaluate(model, val_loader, criterion, device)
+        val_metrics = binary_segmentation_metrics(val_targets, val_probs)
+        summary = {
+            "mode": "eval_only",
+            "weights_in": str(args.weights_in),
+            "val_loss": round(val_loss, 6),
+            "val_metrics": _to_json_safe(val_metrics),
+            "metadata": metadata,
+            "output_dir": str(output_dir),
+        }
+        metrics_path = output_dir / "metrics.json"
+        summary_path = output_dir / "summary.json"
+        metrics_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(
+            f"Eval only | val_loss={val_loss:.4f} val_f1={val_metrics['f1']:.4f} val_iou={val_metrics['iou']:.4f}"
+        )
+        print(f"Output dir: {output_dir}")
+        return
 
     for epoch in range(1, args.epochs + 1):
         if args.freeze_backbone_epochs > 0 and epoch == args.freeze_backbone_epochs + 1:

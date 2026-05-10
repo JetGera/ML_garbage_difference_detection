@@ -53,16 +53,16 @@ CHANGEFORMER_CONFIG = {
     # Side length for transformer inference.
     "input_size": 512,
     # Percentile used to convert the probability map into a binary change mask.
-    "threshold_percentile": 90.0,
+    "threshold_percentile": 93.0,
     # Additional threshold offset relative to Otsu on probability values.
-    "otsu_threshold_offset": 0.02,
+    "otsu_threshold_offset": 0.05,
     # Morphology and component filtering settings for the final mask.
-    "morph_kernel": (5, 5),
-    "morph_open_iterations": 1,
+    "morph_kernel": (7, 7),
+    "morph_open_iterations": 2,
     "morph_close_iterations": 1,
-    "overlap_erode_kernel": 7,
-    "min_component_area_px": 200,
-    "min_component_area_ratio": 0.0015,
+    "overlap_erode_kernel": 9,
+    "min_component_area_px": 320,
+    "min_component_area_ratio": 0.0022,
     "min_component_width_px": 10,
     "min_component_height_px": 8,
     "max_component_aspect_ratio": 8.0,
@@ -85,20 +85,20 @@ CHANGEFORMER_CONFIG = {
     ),
     "alignment_downscale_max_side": 1400,
     # If aligned pair consistency is too low, suppress detections for precision.
-    "min_scene_consistency_for_detection": 0.50,
+    "min_scene_consistency_for_detection": 0.62,
     # Fusion weights for transformer and photometric maps.
-    "transformer_map_weight": 0.78,
-    "photometric_map_weight": 0.22,
+    "transformer_map_weight": 0.84,
+    "photometric_map_weight": 0.16,
     # Test-time augmentation for transformer inference.
     "enable_tta": True,
     "tta_scales": (0.85, 1.0, 1.15),
     "tta_horizontal_flip": True,
     # Suppress edge-dominated noise (tree branches, texture flicker).
-    "edge_suppression_weight": 0.16,
+    "edge_suppression_weight": 0.22,
     # Confidence filters for connected components.
-    "min_component_mean_prob": 0.42,
-    "min_component_peak_prob": 0.60,
-    "max_component_area_ratio": 0.12,
+    "min_component_mean_prob": 0.48,
+    "min_component_peak_prob": 0.68,
+    "max_component_area_ratio": 0.10,
     "min_component_center_y_ratio": 0.30,
     "top_region_peak_override": 0.88,
     # Relaxed rescue rule for compact high-confidence detections in the upper image region.
