@@ -7,11 +7,11 @@ import cv2
 import numpy as np
 
 try:
-	from ..utils.io_utils import prepare_output_dir, sanitize_folder_component, write_image
+	from ..utils.io_utils import pair_folder_name, prepare_output_dir, write_image
 	from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask
 	from ..utils.viz_utils import annotate_panel, resize_if_too_large
 except ImportError:
-	from utils.io_utils import prepare_output_dir, sanitize_folder_component, write_image
+	from utils.io_utils import pair_folder_name, prepare_output_dir, write_image
 	from utils.alignment_utils import build_validity_mask, compute_overlap_mask
 	from utils.viz_utils import annotate_panel, resize_if_too_large
 
@@ -888,20 +888,8 @@ class SiftRansacRunner:
 
 	def _prepare_output_dir(self, before: Path, after: Path) -> Path:
 		root = Path(__file__).resolve().parent.parent.parent / "results"
-		pair_name = self._pair_folder_name(before, after)
+		pair_name = pair_folder_name(before, after)
 		return prepare_output_dir(root, pair_name, self.label)
-
-	def _pair_folder_name(self, before: Path, after: Path) -> str:
-		before_parent = before.parent.name.strip() or "pair"
-		after_parent = after.parent.name.strip() or "pair"
-		if before.parent == after.parent:
-			return self._sanitize_folder_component(before_parent)
-		if before_parent == after_parent:
-			return self._sanitize_folder_component(before_parent)
-		return self._sanitize_folder_component(f"{before_parent}_and_{after_parent}")
-
-	def _sanitize_folder_component(self, value: str) -> str:
-		return sanitize_folder_component(value)
 
 	def _save_artifacts(
 		self,

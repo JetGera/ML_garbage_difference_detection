@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
-import unicodedata
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
-from uuid import uuid4
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -34,9 +30,13 @@ except Exception as exc:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
+    from ..utils.io_utils import pair_folder_name, prepare_output_dir, write_image
+    from ..utils.viz_utils import annotate_panel, resize_if_too_large
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
+    from utils.io_utils import pair_folder_name, prepare_output_dir, write_image
+    from utils.viz_utils import annotate_panel, resize_if_too_large
 
 CHANGEFORMER_CONFIG = {
         # Pyramid Vision Transformer backbone used for feature extraction.
@@ -106,53 +106,29 @@ CHANGEFORMER_CONFIG = {
         "top_region_relaxed_max_area_ratio": 0.015,
     }
 
-CHANGEFORMER_CONFIG = {
-        "backbone_name": "pvt_v2_b0",
-        "fallback_backbone_name": "mobilevitv2_100",
-        "weights_env_var": "CHANGEFORMER_WEIGHTS",
-        "canonical_weights_path": "results/models/changeformer/best.pt",
-        "decoder_channels": 128,
-        "input_size": 512,
-        "threshold_percentile": 93.0,
-        "otsu_threshold_offset": 0.05,
-        # Morphology and connected-component filtering defaults
-        "morph_kernel": (5, 5),
-        "morph_open_iterations": 1,
-        "morph_close_iterations": 2,
-        "min_component_area_px": 64,
-        "min_component_area_ratio": 0.0005,
-        "min_component_width_px": 6,
-        "min_component_height_px": 6,
-        "max_component_aspect_ratio": 6.0,
-        "max_component_area_ratio": 0.25,
-        "min_component_center_y_ratio": 0.08,
-        "top_region_peak_override": 0.80,
-        "top_region_relaxed_peak_prob": 0.65,
-        "top_region_relaxed_min_mean_prob": 0.45,
-        "top_region_relaxed_max_area_ratio": 0.05,
-        "min_component_mean_prob": 0.30,
-        "min_component_peak_prob": 0.45,
-        "drop_border_components": True,
-        "border_margin_px": 8,
-        "colormap": 2,
-        "overlay_alpha": 0.5,
-        "preview_max_width": 1024,
-        "preview_max_height": 1024,
-        # ECC/alignment defaults
-        "ecc_rotation_candidates": (0, 90, 180, 270),
-        "ecc_motion_models": (cv2.MOTION_HOMOGRAPHY, cv2.MOTION_AFFINE, cv2.MOTION_EUCLIDEAN),
-        "ecc_max_iterations": 2500,
-        "ecc_eps": 1e-6,
-        "alignment_downscale_max_side": 800,
-        # TTA / transformer weights
-        "tta_scales": (1.0,),
-        "enable_tta": False,
-        "tta_horizontal_flip": False,
-        "transformer_map_weight": 0.7,
-        "photometric_map_weight": 0.3,
-        "edge_suppression_weight": 0.0,
-    }
+SIFT_CONFIG = {
+    "nfeatures": 30000,
+    "contrast_threshold": 0.04,
+    "clahe_clip_limit": 2.0,
+    "clahe_tile_grid": (8, 8),
+}
 
+ALIGNMENT_CONFIG = {
+    "ratio_test": 0.70,
+    "ratio_test_relaxed": 0.82,
+    "ratio_test_emergency": 0.90,
+    "ransac_reproj_threshold": 3.5,
+    "min_matches_for_homography": 10,
+    "min_inliers_for_homography": 10,
+    "min_inlier_ratio": 0.22,
+    "max_perspective_shear": 0.0015,
+    "min_homography_area_ratio": 0.35,
+    "max_homography_area_ratio": 3.0,
+    "max_affine_rotation_degrees": 18.0,
+    "min_affine_scale_ratio": 0.85,
+    "max_affine_scale_ratio": 1.15,
+    "max_canvas_side": 8000,
+}
 
 if nn is not None and timm is not None:
 
@@ -309,7 +285,9 @@ else:
     class ChangeFormerSegmentationModel:  # pragma: no cover - only used when torch/timm are unavailable
         def __init__(self, *args, **kwargs):
             raise RuntimeError("torch and timm are required for ChangeFormer training or supervised inference")
-            def _strip_state_dict_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
+
+
+def _strip_state_dict_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, value in state_dict.items():
         new_key = key[7:] if key.startswith("module.") else key
@@ -420,6 +398,7 @@ class ChangeformerRunner:
             probability_map = np.zeros_like(probability_map, dtype=np.float32)
 
         change_mask, threshold_value = self._probability_to_mask(probability_map, overlap_mask)
+        preview_use_before_only = str(align_info.get("alignment_mode", "")).endswith("_fallback") or float(align_info.get("alignment_quality", 0.0)) <= 0.0
         change_pixels = int(np.count_nonzero(change_mask))
         overlap_pixels = int(np.count_nonzero(overlap_mask))
         canvas_pixels = int(overlap_mask.size)
@@ -428,7 +407,7 @@ class ChangeformerRunner:
         probability_u8 = (np.clip(probability_map, 0.0, 1.0) * 255.0).astype(np.uint8)
         probability_heatmap = cv2.applyColorMap(probability_u8, int(CHANGEFORMER_CONFIG["colormap"]))
         probability_overlay = self._build_probability_overlay(aligned_after, probability_heatmap)
-        mask_overlay = self._build_mask_overlay(aligned_before, aligned_after, change_mask)
+        mask_overlay = self._build_mask_overlay(aligned_before, aligned_after, change_mask, use_before_only=preview_use_before_only)
         preview = self._compose_preview(
             aligned_before=aligned_before,
             aligned_after=aligned_after,
@@ -436,9 +415,10 @@ class ChangeformerRunner:
             mask_overlay=mask_overlay,
             alignment_mode=str(align_info["alignment_mode"]),
             inference_mode=self._inference_mode,
+            preview_use_before_only=preview_use_before_only,
         )
 
-        output_dir = self._prepare_output_dir(before, after)
+        output_dir = prepare_output_dir(Path(__file__).resolve().parent.parent.parent / "results", pair_folder_name(before, after), self.label)
         artifacts = self._save_artifacts(
             output_dir=output_dir,
             aligned_before=aligned_before,
@@ -522,6 +502,16 @@ class ChangeformerRunner:
         before_img: np.ndarray,
         after_img: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        sift_candidate = self._align_with_sift_ransac(before_img, after_img)
+        if sift_candidate is not None:
+            info = {
+                "alignment_mode": sift_candidate["mode"],
+                "ecc_score": None,
+                "alignment_quality": sift_candidate["quality"],
+                "rotation_deg": int(sift_candidate["rotation_deg"]),
+            }
+            return sift_candidate["aligned_before"], sift_candidate["aligned_after"], sift_candidate["overlap_mask"], info
+
         before_h, before_w = before_img.shape[:2]
         if (before_h, before_w) != after_img.shape[:2]:
             resized_after = cv2.resize(after_img, (before_w, before_h), interpolation=cv2.INTER_LINEAR)
@@ -549,17 +539,7 @@ class ChangeformerRunner:
                 "alignment_quality": best_candidate["quality"],
                 "rotation_deg": best_candidate["rotation_deg"],
             }
-            return before_ref, best_candidate["aligned_after"], best_candidate["overlap_mask"], info
-
-        orb_candidate = self._align_with_orb_homography(before_ref, resized_after)
-        if orb_candidate is not None:
-            info = {
-                "alignment_mode": "orb_homography",
-                "ecc_score": None,
-                "alignment_quality": orb_candidate["quality"],
-                "rotation_deg": int(orb_candidate["rotation_deg"]),
-            }
-            return before_ref, orb_candidate["aligned_after"], orb_candidate["overlap_mask"], info
+            return best_candidate["aligned_before"], best_candidate["aligned_after"], best_candidate["overlap_mask"], info
 
         fallback_overlap = np.full((before_h, before_w), 255, dtype=np.uint8)
         info = {
@@ -569,6 +549,211 @@ class ChangeformerRunner:
             "rotation_deg": 0,
         }
         return before_ref, resized_after, fallback_overlap, info
+
+    def _align_with_sift_ransac(self, before_img: np.ndarray, after_img: np.ndarray) -> dict[str, Any] | None:
+        if not hasattr(cv2, "SIFT_create"):
+            return None
+
+        before_gray = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY)
+        after_gray = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY)
+        before_feat = self._enhance_for_features(before_gray)
+        after_feat = self._enhance_for_features(after_gray)
+
+        sift = cv2.SIFT_create(
+            nfeatures=int(SIFT_CONFIG["nfeatures"]),
+            contrastThreshold=float(SIFT_CONFIG["contrast_threshold"]),
+        )
+        kp_before, desc_before = sift.detectAndCompute(before_feat, None)
+        kp_after, desc_after = sift.detectAndCompute(after_feat, None)
+
+        if desc_before is None or desc_after is None:
+            return None
+        if len(kp_before) < int(ALIGNMENT_CONFIG["min_matches_for_homography"]) or len(kp_after) < int(ALIGNMENT_CONFIG["min_matches_for_homography"]):
+            return None
+
+        desc_before = self._to_rootsift(desc_before)
+        desc_after = self._to_rootsift(desc_after)
+        matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+        raw_matches = matcher.knnMatch(desc_before, desc_after, k=2)
+
+        good_matches = self._ratio_filter_matches(raw_matches, float(ALIGNMENT_CONFIG["ratio_test"]))
+        if len(good_matches) < int(ALIGNMENT_CONFIG["min_matches_for_homography"]):
+            relaxed_matches = self._ratio_filter_matches(raw_matches, float(ALIGNMENT_CONFIG["ratio_test_relaxed"]))
+            if len(relaxed_matches) > len(good_matches):
+                good_matches = relaxed_matches
+        if len(good_matches) < int(ALIGNMENT_CONFIG["min_matches_for_homography"]):
+            emergency_matches = self._ratio_filter_matches(raw_matches, float(ALIGNMENT_CONFIG["ratio_test_emergency"]))
+            if len(emergency_matches) > len(good_matches):
+                good_matches = emergency_matches
+
+        if len(good_matches) < int(ALIGNMENT_CONFIG["min_matches_for_homography"]):
+            return None
+
+        src_pts = np.float32([kp_after[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp_before[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        homography_method = cv2.USAC_MAGSAC if hasattr(cv2, "USAC_MAGSAC") else cv2.RANSAC
+        homography, inlier_mask = cv2.findHomography(
+            src_pts,
+            dst_pts,
+            method=homography_method,
+            ransacReprojThreshold=float(ALIGNMENT_CONFIG["ransac_reproj_threshold"]),
+            maxIters=12000,
+            confidence=0.999,
+        )
+        if homography is None:
+            return None
+        if not self._is_homography_sane(before_img, after_img, homography):
+            return None
+
+        inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
+        inlier_ratio = float(inliers / max(len(good_matches), 1))
+        if inliers < int(ALIGNMENT_CONFIG["min_inliers_for_homography"]) or inlier_ratio < float(ALIGNMENT_CONFIG["min_inlier_ratio"]):
+            return None
+
+        aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, homography)
+        overlap_ratio = float(np.count_nonzero(overlap_mask) / max(overlap_mask.size, 1))
+        if overlap_ratio <= 0.05:
+            return None
+
+        residual = self._alignment_residual(aligned_before, aligned_after, overlap_mask)
+        quality = float((inliers / max(len(good_matches), 1)) * overlap_ratio * (1.0 - residual))
+        return {
+            "aligned_before": aligned_before,
+            "aligned_after": aligned_after,
+            "overlap_mask": overlap_mask,
+            "quality": quality,
+            "rotation_deg": 0,
+            "mode": "sift_homography_ransac",
+        }
+
+    def _enhance_for_features(self, gray: np.ndarray) -> np.ndarray:
+        clahe = cv2.createCLAHE(
+            clipLimit=float(SIFT_CONFIG["clahe_clip_limit"]),
+            tileGridSize=tuple(SIFT_CONFIG["clahe_tile_grid"]),
+        )
+        return clahe.apply(gray)
+
+    def _to_rootsift(self, descriptors: np.ndarray) -> np.ndarray:
+        if descriptors is None or descriptors.size == 0:
+            return descriptors
+        desc = descriptors.astype(np.float32, copy=False)
+        l1 = np.sum(np.abs(desc), axis=1, keepdims=True)
+        desc = desc / np.maximum(l1, 1e-12)
+        return np.sqrt(desc)
+
+    def _ratio_filter_matches(self, raw_matches: list[list[cv2.DMatch]], ratio: float) -> list[cv2.DMatch]:
+        filtered: list[cv2.DMatch] = []
+        for pair in raw_matches:
+            if len(pair) < 2:
+                continue
+            first, second = pair
+            if first.distance < ratio * second.distance:
+                filtered.append(first)
+        return filtered
+
+    def _is_homography_sane(self, before_img: np.ndarray, after_img: np.ndarray, homography: np.ndarray) -> bool:
+        if homography.shape != (3, 3):
+            return False
+        if not np.isfinite(homography).all():
+            return False
+
+        projective_terms = float(abs(homography[2, 0]) + abs(homography[2, 1]))
+        if projective_terms > float(ALIGNMENT_CONFIG["max_perspective_shear"]):
+            return False
+
+        before_h, before_w = before_img.shape[:2]
+        after_h, after_w = after_img.shape[:2]
+        before_corners = np.float32([[0, 0], [before_w, 0], [before_w, before_h], [0, before_h]]).reshape(-1, 1, 2)
+        after_corners = np.float32([[0, 0], [after_w, 0], [after_w, after_h], [0, after_h]]).reshape(-1, 1, 2)
+        warped_after_corners = cv2.perspectiveTransform(after_corners, homography)
+        before_area = float(before_w * before_h)
+        warped_area = float(abs(cv2.contourArea(warped_after_corners.astype(np.float32))))
+        if warped_area <= 1.0:
+            return False
+
+        area_ratio = warped_area / max(before_area, 1.0)
+        if area_ratio < float(ALIGNMENT_CONFIG["min_homography_area_ratio"]) or area_ratio > float(ALIGNMENT_CONFIG["max_homography_area_ratio"]):
+            return False
+
+        return True
+
+    def _warp_to_shared_canvas(
+        self,
+        before_img: np.ndarray,
+        after_img: np.ndarray,
+        after_to_before_transform: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        before_h, before_w = before_img.shape[:2]
+        after_h, after_w = after_img.shape[:2]
+
+        before_corners = np.float32([[0, 0], [before_w, 0], [before_w, before_h], [0, before_h]]).reshape(-1, 1, 2)
+        after_corners = np.float32([[0, 0], [after_w, 0], [after_w, after_h], [0, after_h]]).reshape(-1, 1, 2)
+        warped_after_corners = cv2.perspectiveTransform(after_corners, after_to_before_transform)
+
+        all_corners = np.vstack([before_corners, warped_after_corners]).reshape(-1, 2)
+        min_x = int(np.floor(all_corners[:, 0].min()))
+        min_y = int(np.floor(all_corners[:, 1].min()))
+        max_x = int(np.ceil(all_corners[:, 0].max()))
+        max_y = int(np.ceil(all_corners[:, 1].max()))
+
+        canvas_w = max(1, max_x - min_x)
+        canvas_h = max(1, max_y - min_y)
+        if canvas_w > int(CHANGEFORMER_CONFIG["preview_max_width"]) * 2 or canvas_h > int(CHANGEFORMER_CONFIG["preview_max_height"]) * 2:
+            raise ValueError("Shared canvas produced an unreasonably large result")
+
+        translation = np.array(
+            [
+                [1.0, 0.0, -float(min_x)],
+                [0.0, 1.0, -float(min_y)],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+
+        before_canvas = cv2.warpPerspective(
+            before_img,
+            translation,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
+        after_canvas = cv2.warpPerspective(
+            after_img,
+            translation @ after_to_before_transform,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
+
+        before_valid = cv2.warpPerspective(
+            np.full((before_h, before_w), 255, dtype=np.uint8),
+            translation,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        after_valid = cv2.warpPerspective(
+            np.full((after_h, after_w), 255, dtype=np.uint8),
+            translation @ after_to_before_transform,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        overlap_mask = cv2.bitwise_and(before_valid, after_valid)
+
+        union_mask = cv2.bitwise_or(before_valid, after_valid)
+        non_zero_points = cv2.findNonZero(union_mask)
+        if non_zero_points is not None:
+            x, y, w, h = cv2.boundingRect(non_zero_points)
+            before_canvas = before_canvas[y : y + h, x : x + w]
+            after_canvas = after_canvas[y : y + h, x : x + w]
+            overlap_mask = overlap_mask[y : y + h, x : x + w]
+
+        return before_canvas, after_canvas, overlap_mask
 
     def _rotate_to_reference_shape(self, image: np.ndarray, rotation_deg: int, target_w: int, target_h: int) -> np.ndarray:
         if rotation_deg == 0:
@@ -636,51 +821,24 @@ class ChangeformerRunner:
             return None
 
         if motion_type == cv2.MOTION_HOMOGRAPHY:
-            aligned_after = cv2.warpPerspective(
-                after_img,
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_REFLECT,
-            )
-            warped_valid = cv2.warpPerspective(
-                np.full((before_h, before_w), 255, dtype=np.uint8),
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
+            after_to_before_transform = np.linalg.inv(warp_matrix.astype(np.float64))
+        else:
+            after_to_before_transform = np.vstack([cv2.invertAffineTransform(warp_matrix), [0.0, 0.0, 1.0]]).astype(np.float64)
+
+        if motion_type == cv2.MOTION_HOMOGRAPHY:
             motion_name = "homography"
         else:
-            aligned_after = cv2.warpAffine(
-                after_img,
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_REFLECT,
-            )
-            warped_valid = cv2.warpAffine(
-                np.full((before_h, before_w), 255, dtype=np.uint8),
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
             motion_name = "affine" if motion_type == cv2.MOTION_AFFINE else "euclidean"
 
-        overlap_mask = cv2.bitwise_and(
-            np.full((before_h, before_w), 255, dtype=np.uint8),
-            warped_valid,
-        )
+        aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, after_to_before_transform)
         overlap_ratio = float(np.count_nonzero(overlap_mask) / max(overlap_mask.size, 1))
         if overlap_ratio <= 0.05:
             return None
 
-        residual = self._alignment_residual(before_img, aligned_after, overlap_mask)
+        residual = self._alignment_residual(aligned_before, aligned_after, overlap_mask)
         quality = float((float(ecc_score) + 1.0) * overlap_ratio * (1.0 - residual))
         return {
+            "aligned_before": aligned_before,
             "aligned_after": aligned_after,
             "overlap_mask": overlap_mask,
             "ecc_score": float(ecc_score),
@@ -688,77 +846,6 @@ class ChangeformerRunner:
             "rotation_deg": int(rotation_deg),
             "mode": f"ecc_{motion_name}_rot{int(rotation_deg)}",
         }
-
-    def _align_with_orb_homography(self, before_img: np.ndarray, after_img: np.ndarray) -> dict[str, Any] | None:
-        before_h, before_w = before_img.shape[:2]
-        orb = cv2.ORB_create(nfeatures=6000)
-
-        before_gray = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY)
-        kp_before, desc_before = orb.detectAndCompute(before_gray, None)
-        if desc_before is None or len(kp_before) < 12:
-            return None
-
-        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-        best_candidate: dict[str, Any] | None = None
-
-        for rotation_deg in CHANGEFORMER_CONFIG["ecc_rotation_candidates"]:
-            candidate_after = self._rotate_to_reference_shape(after_img, int(rotation_deg), before_w, before_h)
-            after_gray = cv2.cvtColor(candidate_after, cv2.COLOR_BGR2GRAY)
-            kp_after, desc_after = orb.detectAndCompute(after_gray, None)
-            if desc_after is None or len(kp_after) < 12:
-                continue
-
-            raw_matches = matcher.knnMatch(desc_before, desc_after, k=2)
-            good_matches = []
-            for pair in raw_matches:
-                if len(pair) < 2:
-                    continue
-                first, second = pair
-                if first.distance < 0.78 * second.distance:
-                    good_matches.append(first)
-
-            if len(good_matches) < 10:
-                continue
-
-            src_pts = np.float32([kp_after[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-            dst_pts = np.float32([kp_before[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-            homography, inlier_mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 4.0)
-            if homography is None:
-                continue
-
-            aligned_after = cv2.warpPerspective(
-                candidate_after,
-                homography,
-                (before_w, before_h),
-                flags=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_REFLECT,
-            )
-            warped_valid = cv2.warpPerspective(
-                np.full((before_h, before_w), 255, dtype=np.uint8),
-                homography,
-                (before_w, before_h),
-                flags=cv2.INTER_NEAREST,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
-            overlap_mask = cv2.bitwise_and(np.full((before_h, before_w), 255, dtype=np.uint8), warped_valid)
-            overlap_ratio = float(np.count_nonzero(overlap_mask) / max(overlap_mask.size, 1))
-            if overlap_ratio <= 0.05:
-                continue
-
-            inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
-            residual = self._alignment_residual(before_img, aligned_after, overlap_mask)
-            quality = float((inliers / max(len(good_matches), 1)) * overlap_ratio * (1.0 - residual))
-            candidate = {
-                "aligned_after": aligned_after,
-                "overlap_mask": overlap_mask,
-                "quality": quality,
-                "rotation_deg": int(rotation_deg),
-            }
-            if best_candidate is None or candidate["quality"] > best_candidate["quality"]:
-                best_candidate = candidate
-
-        return best_candidate
 
     def _alignment_residual(self, before_img: np.ndarray, aligned_after: np.ndarray, overlap_mask: np.ndarray) -> float:
         before_gray = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -1346,8 +1433,14 @@ class ChangeformerRunner:
         alpha = float(CHANGEFORMER_CONFIG["overlay_alpha"])
         return cv2.addWeighted(image, 1.0 - alpha, probability_heatmap, alpha, 0)
 
-    def _build_mask_overlay(self, before_img: np.ndarray, after_img: np.ndarray, change_mask: np.ndarray) -> np.ndarray:
-        base = cv2.addWeighted(before_img, 0.5, after_img, 0.5, 0)
+    def _build_mask_overlay(
+        self,
+        before_img: np.ndarray,
+        after_img: np.ndarray,
+        change_mask: np.ndarray,
+        use_before_only: bool = False,
+    ) -> np.ndarray:
+        base = before_img if use_before_only else cv2.addWeighted(before_img, 0.5, after_img, 0.5, 0)
         colored = np.zeros_like(base)
         colored[:, :, 2] = change_mask
         colored[:, :, 1] = (change_mask // 2)
@@ -1366,62 +1459,22 @@ class ChangeformerRunner:
         mask_overlay: np.ndarray,
         alignment_mode: str,
         inference_mode: str,
+        preview_use_before_only: bool,
     ) -> np.ndarray:
-        panel_before = self._annotate_panel(aligned_before, "Before (aligned frame)")
-        panel_after = self._annotate_panel(aligned_after, f"After aligned ({alignment_mode})")
-        panel_prob = self._annotate_panel(probability_overlay, f"Change probability ({inference_mode})")
-        panel_mask = self._annotate_panel(mask_overlay, "Binary change mask overlay")
+        panel_before = annotate_panel(aligned_before, "Before (aligned frame)")
+        panel_after = annotate_panel(aligned_after, f"After aligned ({alignment_mode})")
+        panel_prob = annotate_panel(probability_overlay, f"Change probability ({inference_mode})")
+        mask_title = "Detected changes (Before fallback)" if preview_use_before_only else "Detected changes (Before/After blend)"
+        panel_mask = annotate_panel(mask_overlay, mask_title)
 
         top = np.hstack([panel_before, panel_after])
         bottom = np.hstack([panel_prob, panel_mask])
         grid = np.vstack([top, bottom])
-        return self._resize_if_too_large(
+        return resize_if_too_large(
             grid,
             max_width=int(CHANGEFORMER_CONFIG["preview_max_width"]),
             max_height=int(CHANGEFORMER_CONFIG["preview_max_height"]),
         )
-
-    def _annotate_panel(self, image: np.ndarray, title: str) -> np.ndarray:
-        panel = image.copy()
-        bar_h = int(CHANGEFORMER_CONFIG["panel_title_height"])
-        cv2.rectangle(panel, (0, 0), (panel.shape[1], bar_h), (0, 0, 0), thickness=-1)
-        cv2.putText(panel, title, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.76, (255, 255, 255), 2, cv2.LINE_AA)
-        return panel
-
-    def _resize_if_too_large(self, image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
-        height, width = image.shape[:2]
-        scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-        if scale >= 1.0:
-            return image
-        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-        return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
-    def _prepare_output_dir(self, before: Path, after: Path) -> Path:
-        root = Path(__file__).resolve().parent.parent.parent / "results"
-        pair_name = self._pair_folder_name(before, after)
-        method_name = self._sanitize_folder_component(self.label)
-        timestamp = datetime.now().strftime("%d.%m.%Y %H-%M")
-        run_dir_name = f"{pair_name}__{method_name}__{timestamp}__{uuid4().hex[:6]}"
-        output_dir = root / run_dir_name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir
-
-    def _pair_folder_name(self, before: Path, after: Path) -> str:
-        before_parent = before.parent.name.strip() or "pair"
-        after_parent = after.parent.name.strip() or "pair"
-        if before.parent == after.parent:
-            return self._sanitize_folder_component(before_parent)
-        if before_parent == after_parent:
-            return self._sanitize_folder_component(before_parent)
-        return self._sanitize_folder_component(f"{before_parent}_and_{after_parent}")
-
-    def _sanitize_folder_component(self, value: str) -> str:
-        normalized = unicodedata.normalize("NFKD", value)
-        ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
-        ascii_text = ascii_text.strip().replace("/", "_").replace("\\", "_").replace(":", "-")
-        ascii_text = re.sub(r"[^A-Za-z0-9._-]+", "_", ascii_text)
-        ascii_text = re.sub(r"_+", "_", ascii_text).strip("._-")
-        return ascii_text or "pair"
 
     def _save_artifacts(
         self,
@@ -1444,17 +1497,11 @@ class ChangeformerRunner:
             "preview": output_dir / "preview.png",
         }
 
-        self._write_image(paths["aligned_before"], aligned_before)
-        self._write_image(paths["aligned_after"], aligned_after)
-        self._write_image(paths["overlap_mask"], overlap_mask)
-        self._write_image(paths["change_probability"], probability_map)
-        self._write_image(paths["change_probability_overlay"], probability_overlay)
-        self._write_image(paths["change_mask"], change_mask)
-        self._write_image(paths["preview"], preview)
+        write_image(paths["aligned_before"], aligned_before)
+        write_image(paths["aligned_after"], aligned_after)
+        write_image(paths["overlap_mask"], overlap_mask)
+        write_image(paths["change_probability"], probability_map)
+        write_image(paths["change_probability_overlay"], probability_overlay)
+        write_image(paths["change_mask"], change_mask)
+        write_image(paths["preview"], preview)
         return paths
-
-    def _write_image(self, path: Path, image: np.ndarray) -> None:
-        ok, encoded = cv2.imencode(".png", image)
-        if not ok:
-            raise RuntimeError(f"Failed to encode image: {path}")
-        path.write_bytes(encoded.tobytes())

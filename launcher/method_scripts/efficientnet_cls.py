@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import os
-import re
-import unicodedata
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
-from uuid import uuid4
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -32,9 +28,13 @@ except Exception:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
+    from ..utils.io_utils import prepare_pair_output_dir, save_artifact_images
+    from ..utils.viz_utils import annotate_panel, compose_panel_grid
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
+    from utils.io_utils import prepare_pair_output_dir, save_artifact_images
+    from utils.viz_utils import annotate_panel, compose_panel_grid
 
 
 EFFICIENTNET_CLS_CONFIG = {
@@ -147,13 +147,15 @@ class EfficientNetClsRunner:
         after_overlay = self._build_score_overlay(after_img, after_pred, title="After")
         preview = self._compose_preview(before_img, after_img, before_overlay, after_overlay, diff_preview)
 
-        output_dir = self._prepare_output_dir(before, after)
-        artifacts = self._save_artifacts(
-            output_dir=output_dir,
-            before_overlay=before_overlay,
-            after_overlay=after_overlay,
-            diff_preview=diff_preview,
-            preview=preview,
+        output_dir = prepare_pair_output_dir(Path(__file__).resolve().parent.parent.parent / "results", before, after, self.label)
+        artifacts = save_artifact_images(
+            output_dir,
+            {
+                "before_overlay": before_overlay,
+                "after_overlay": after_overlay,
+                "difference_heatmap": diff_preview,
+                "preview": preview,
+            },
         )
 
         cleanup_delta = float(before_pred["dirty_prob"] - after_pred["dirty_prob"])
@@ -707,113 +709,17 @@ class EfficientNetClsRunner:
         cell_h = max(1, int(EFFICIENTNET_CLS_CONFIG["preview_max_height"]) // 2)
 
         panels = [
-            self._annotate_panel(self._fit_to_box(before_img, cell_w, cell_h), "Before"),
-            self._annotate_panel(self._fit_to_box(after_img, cell_w, cell_h), "After"),
-            self._annotate_panel(self._fit_to_box(before_overlay, cell_w, cell_h), "Before score overlay"),
-            self._annotate_panel(self._fit_to_box(after_overlay, cell_w, cell_h), "After score overlay"),
+            annotate_panel(before_img, "Before"),
+            annotate_panel(after_img, "After"),
+            annotate_panel(before_overlay, "Before score overlay"),
+            annotate_panel(diff_preview, "Difference heatmap"),
         ]
-        diff_panel = self._annotate_panel(self._fit_to_box(diff_preview, cell_w, cell_h), "Difference heatmap")
 
-        panels = [self._pad_to_size(panel, cell_w, cell_h) for panel in panels]
-        diff_panel = self._pad_to_size(diff_panel, cell_w, cell_h)
-        panels[3] = diff_panel
-
-        top = np.hstack([panels[0], panels[1]])
-        bottom = np.hstack([panels[2], panels[3]])
-        grid = np.vstack([top, bottom])
-
-        return self._resize_if_too_large(
-            grid,
+        return compose_panel_grid(
+            panels,
+            cell_width=cell_w,
+            cell_height=cell_h,
             max_width=int(EFFICIENTNET_CLS_CONFIG["preview_max_width"]),
             max_height=int(EFFICIENTNET_CLS_CONFIG["preview_max_height"]),
+            columns=2,
         )
-
-    def _fit_to_box(self, image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
-        height, width = image.shape[:2]
-        scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-        if scale >= 1.0:
-            return image
-        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-        return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
-    def _pad_to_size(self, image: np.ndarray, target_width: int, target_height: int) -> np.ndarray:
-        height, width = image.shape[:2]
-        if height == target_height and width == target_width:
-            return image
-        canvas = np.zeros((target_height, target_width, 3), dtype=image.dtype)
-        x_offset = max(0, (target_width - width) // 2)
-        y_offset = max(0, (target_height - height) // 2)
-        canvas[y_offset : y_offset + height, x_offset : x_offset + width] = image[: target_height - y_offset, : target_width - x_offset]
-        return canvas
-
-    def _annotate_panel(self, image: np.ndarray, title: str) -> np.ndarray:
-        panel = image.copy()
-        bar_h = int(EFFICIENTNET_CLS_CONFIG["panel_title_height"])
-        cv2.rectangle(panel, (0, 0), (panel.shape[1], bar_h), (0, 0, 0), thickness=-1)
-        cv2.putText(panel, title, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
-        return panel
-
-    def _resize_if_too_large(self, image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
-        height, width = image.shape[:2]
-        scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-        if scale >= 1.0:
-            return image
-        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-        return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
-    def _prepare_output_dir(self, before: Path, after: Path) -> Path:
-        root = Path(__file__).resolve().parent.parent.parent / "results"
-        pair_name = self._pair_folder_name(before, after)
-        method_name = self._sanitize_folder_component(self.label)
-        timestamp = datetime.now().strftime("%d.%m.%Y %H-%M")
-        run_dir_name = f"{pair_name}__{method_name}__{timestamp}__{uuid4().hex[:6]}"
-        output_dir = root / run_dir_name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir
-
-    def _pair_folder_name(self, before: Path, after: Path) -> str:
-        before_parent = before.parent.name.strip() or "pair"
-        after_parent = after.parent.name.strip() or "pair"
-        if before.parent == after.parent:
-            return self._sanitize_folder_component(before_parent)
-        if before_parent == after_parent:
-            return self._sanitize_folder_component(before_parent)
-        return self._sanitize_folder_component(f"{before_parent}_and_{after_parent}")
-
-    def _sanitize_folder_component(self, value: str) -> str:
-        normalized = unicodedata.normalize("NFKD", value)
-        ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
-        ascii_text = ascii_text.strip().replace("/", "_").replace("\\", "_").replace(":", "-")
-        ascii_text = re.sub(r"[^A-Za-z0-9._-]+", "_", ascii_text)
-        ascii_text = re.sub(r"_+", "_", ascii_text).strip("._-")
-        return ascii_text or "pair"
-
-    def _save_artifacts(
-        self,
-        output_dir: Path,
-        before_overlay: np.ndarray,
-        after_overlay: np.ndarray,
-        diff_preview: np.ndarray,
-        preview: np.ndarray,
-    ) -> dict[str, Path]:
-        paths = {
-            "before_overlay": output_dir / "before_overlay.png",
-            "after_overlay": output_dir / "after_overlay.png",
-            "difference_heatmap": output_dir / "difference_heatmap.png",
-            "preview": output_dir / "preview.png",
-        }
-
-        self._write_image(paths["before_overlay"], before_overlay)
-        self._write_image(paths["after_overlay"], after_overlay)
-        self._write_image(paths["difference_heatmap"], diff_preview)
-        self._write_image(paths["preview"], preview)
-        return paths
-
-    def _write_image(self, path: Path, image: np.ndarray) -> None:
-        ok, encoded = cv2.imencode(".png", image)
-        if not ok:
-            raise RuntimeError(f"Failed to encode image: {path}")
-        try:
-            path.write_bytes(encoded.tobytes())
-        except OSError as exc:
-            raise RuntimeError(f"Failed to write image: {path}")

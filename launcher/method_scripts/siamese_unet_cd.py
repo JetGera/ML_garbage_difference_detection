@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from uuid import uuid4
-    from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-    from utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 import cv2
 import numpy as np
 
@@ -30,9 +26,15 @@ except Exception:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
+    from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
+    from ..utils.io_utils import write_image
+    from ..utils.viz_utils import annotate_panel, blend_with_alpha, resize_if_too_large
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
+    from utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
+    from utils.io_utils import write_image
+    from utils.viz_utils import annotate_panel, blend_with_alpha, resize_if_too_large
 
 
 SIAMESE_UNET_CD_CONFIG = {
@@ -207,7 +209,11 @@ class SiameseUnetCdRunner:
 
         probability_u8 = (np.clip(probability_map, 0.0, 1.0) * 255.0).astype(np.uint8)
         probability_heatmap = cv2.applyColorMap(probability_u8, int(SIAMESE_UNET_CD_CONFIG["colormap"]))
-        probability_overlay = self._blend_overlay(aligned_after, probability_heatmap, float(SIAMESE_UNET_CD_CONFIG["overlay_alpha"]))
+        probability_overlay = blend_with_alpha(
+            cv2.cvtColor(aligned_after, cv2.COLOR_BGR2RGB),
+            cv2.cvtColor(probability_heatmap, cv2.COLOR_BGR2RGB),
+            float(SIAMESE_UNET_CD_CONFIG["overlay_alpha"]),
+        )
         mask_overlay = self._blend_mask_overlay(aligned_after, change_mask)
         preview = self._compose_preview(aligned_before, aligned_after, probability_overlay, mask_overlay, alignment_mode)
 
@@ -396,37 +402,15 @@ class SiameseUnetCdRunner:
 
     def _compose_preview(self, before_img: np.ndarray, after_img: np.ndarray, probability_overlay: np.ndarray, mask_overlay: np.ndarray, alignment_mode: str) -> np.ndarray:
         panels = [
-            self._add_title(before_img, f"Before | {alignment_mode}"),
-            self._add_title(after_img, "After"),
-            self._add_title(probability_overlay, "Probability map"),
-            self._add_title(mask_overlay, "Change mask"),
+            annotate_panel(before_img, f"Before | {alignment_mode}"),
+            annotate_panel(after_img, "After"),
+            annotate_panel(probability_overlay, "Probability map"),
+            annotate_panel(mask_overlay, "Change mask"),
         ]
         top = np.hstack([panels[0], panels[1]])
         bottom = np.hstack([panels[2], panels[3]])
         preview = np.vstack([top, bottom])
-        return self._resize_for_preview(preview)
-
-    def _add_title(self, image: np.ndarray, title: str) -> np.ndarray:
-        title_h = int(SIAMESE_UNET_CD_CONFIG["panel_title_height"])
-        canvas = np.zeros((image.shape[0] + title_h, image.shape[1], 3), dtype=np.uint8)
-        canvas[title_h:, :] = image
-        cv2.rectangle(canvas, (0, 0), (canvas.shape[1], title_h), (18, 18, 18), thickness=-1)
-        cv2.putText(canvas, title, (12, int(title_h * 0.68)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-        return canvas
-
-    def _resize_for_preview(self, preview: np.ndarray) -> np.ndarray:
-        max_width = int(SIAMESE_UNET_CD_CONFIG["preview_max_width"])
-        max_height = int(SIAMESE_UNET_CD_CONFIG["preview_max_height"])
-        height, width = preview.shape[:2]
-        scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-        if scale < 1.0:
-            preview = cv2.resize(preview, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
-        return preview
-
-    def _blend_overlay(self, base_image: np.ndarray, overlay: np.ndarray, alpha: float) -> np.ndarray:
-        base_rgb = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
-        overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-        return cv2.addWeighted(base_rgb, 1.0 - alpha, overlay_rgb, alpha, 0.0)
+        return resize_if_too_large(preview, int(SIAMESE_UNET_CD_CONFIG["preview_max_width"]), int(SIAMESE_UNET_CD_CONFIG["preview_max_height"]))
 
     def _blend_mask_overlay(self, after_img: np.ndarray, mask: np.ndarray) -> np.ndarray:
         overlay = cv2.cvtColor(after_img, cv2.COLOR_BGR2RGB)
@@ -452,11 +436,11 @@ class SiameseUnetCdRunner:
             "change_mask": output_dir / "change_mask.png",
             "preview": output_dir / "preview.png",
         }
-        cv2.imwrite(str(artifacts["aligned_before"]), aligned_before)
-        cv2.imwrite(str(artifacts["aligned_after"]), aligned_after)
-        cv2.imwrite(str(artifacts["overlap_mask"]), overlap_mask)
-        cv2.imwrite(str(artifacts["probability_map"]), probability_map)
-        cv2.imwrite(str(artifacts["probability_overlay"]), cv2.cvtColor(probability_overlay, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(str(artifacts["change_mask"]), change_mask)
-        cv2.imwrite(str(artifacts["preview"]), cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
+        write_image(artifacts["aligned_before"], aligned_before)
+        write_image(artifacts["aligned_after"], aligned_after)
+        write_image(artifacts["overlap_mask"], overlap_mask)
+        write_image(artifacts["probability_map"], probability_map)
+        write_image(artifacts["probability_overlay"], cv2.cvtColor(probability_overlay, cv2.COLOR_RGB2BGR))
+        write_image(artifacts["change_mask"], change_mask)
+        write_image(artifacts["preview"], cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
         return artifacts

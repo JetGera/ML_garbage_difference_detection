@@ -15,6 +15,13 @@ import cv2
 import numpy as np
 
 try:
+	from ..utils.io_utils import sanitize_folder_component, write_image
+	from ..utils.viz_utils import annotate_panel, blend_with_alpha, pad_to_size, resize_if_too_large
+except ImportError:
+	from utils.io_utils import sanitize_folder_component, write_image
+	from utils.viz_utils import annotate_panel, blend_with_alpha, pad_to_size, resize_if_too_large
+
+try:
     import torch
 except ImportError:
     torch = None
@@ -951,7 +958,7 @@ class YoloV8SegRunner:
 		base = image.copy()
 		if mask_canvas.size == 0:
 			return base
-		return cv2.addWeighted(base, 1.0 - float(YOLOV8_SEG_CONFIG["mask_alpha"]), mask_canvas, float(YOLOV8_SEG_CONFIG["mask_alpha"]), 0)
+		return blend_with_alpha(base, mask_canvas, float(YOLOV8_SEG_CONFIG["mask_alpha"]))
 
 	def _build_diff_preview(self, before_img: np.ndarray, after_img: np.ndarray) -> np.ndarray:
 		if before_img.shape[:2] != after_img.shape[:2]:
@@ -959,7 +966,7 @@ class YoloV8SegRunner:
 		diff = cv2.absdiff(before_img, after_img)
 		diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
 		heatmap = cv2.applyColorMap(diff_gray, int(YOLOV8_SEG_CONFIG["colormap"]))
-		return cv2.addWeighted(after_img, 0.55, heatmap, 0.45, 0)
+		return blend_with_alpha(after_img, heatmap, 0.45)
 
 	def _compose_preview(
 		self,
@@ -973,59 +980,26 @@ class YoloV8SegRunner:
 		cell_w = max(1, int(YOLOV8_SEG_CONFIG["preview_max_width"]) // 2)
 		cell_h = max(1, int(YOLOV8_SEG_CONFIG["preview_max_height"]) // 2)
 		fallback_title = "Diff fallback" if not has_any_detections else "Overlay note"
-		fallback_panel = self._annotate_panel(self._fit_to_box(diff_preview, cell_w, cell_h), fallback_title)
+		fallback_panel = annotate_panel(resize_if_too_large(diff_preview, cell_w, cell_h), fallback_title)
 
 		panels = [
-			self._annotate_panel(self._fit_to_box(before_img, cell_w, cell_h), "Before"),
-			self._annotate_panel(self._fit_to_box(after_img, cell_w, cell_h), "After"),
-			self._annotate_panel(self._fit_to_box(before_overlay, cell_w, cell_h), "Before overlay"),
-			self._annotate_panel(self._fit_to_box(after_overlay, cell_w, cell_h), "After overlay"),
+			annotate_panel(resize_if_too_large(before_img, cell_w, cell_h), "Before"),
+			annotate_panel(resize_if_too_large(after_img, cell_w, cell_h), "After"),
+			annotate_panel(resize_if_too_large(before_overlay, cell_w, cell_h), "Before overlay"),
+			annotate_panel(resize_if_too_large(after_overlay, cell_w, cell_h), "After overlay"),
 		]
 		if not has_any_detections:
-			panels[2] = self._annotate_panel(self._fit_to_box(fallback_panel, cell_w, cell_h), "No masks detected")
-			panels[3] = self._annotate_panel(self._fit_to_box(fallback_panel, cell_w, cell_h), "No masks detected")
-		panels = [self._pad_to_size(panel, cell_w, cell_h) for panel in panels]
+			panels[2] = annotate_panel(resize_if_too_large(fallback_panel, cell_w, cell_h), "No masks detected")
+			panels[3] = annotate_panel(resize_if_too_large(fallback_panel, cell_w, cell_h), "No masks detected")
+		panels = [pad_to_size(panel, cell_w, cell_h) for panel in panels]
 		top = np.hstack([panels[0], panels[1]])
 		bottom = np.hstack([panels[2], panels[3]])
 		grid = np.vstack([top, bottom])
-		return self._resize_if_too_large(
+		return resize_if_too_large(
 			grid,
 			max_width=int(YOLOV8_SEG_CONFIG["preview_max_width"]),
 			max_height=int(YOLOV8_SEG_CONFIG["preview_max_height"]),
 		)
-
-	def _fit_to_box(self, image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
-		height, width = image.shape[:2]
-		scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-		if scale >= 1.0:
-			return image
-		new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-		return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
-	def _pad_to_size(self, image: np.ndarray, target_width: int, target_height: int) -> np.ndarray:
-		height, width = image.shape[:2]
-		if height == target_height and width == target_width:
-			return image
-		canvas = np.zeros((target_height, target_width, 3), dtype=image.dtype)
-		x_offset = max(0, (target_width - width) // 2)
-		y_offset = max(0, (target_height - height) // 2)
-		canvas[y_offset : y_offset + height, x_offset : x_offset + width] = image[: target_height - y_offset, : target_width - x_offset]
-		return canvas
-
-	def _annotate_panel(self, image: np.ndarray, title: str) -> np.ndarray:
-		panel = image.copy()
-		panel_height = int(YOLOV8_SEG_CONFIG["panel_title_height"])
-		cv2.rectangle(panel, (0, 0), (panel.shape[1], panel_height), (0, 0, 0), -1)
-		cv2.putText(panel, title, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-		return panel
-
-	def _resize_if_too_large(self, image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
-		height, width = image.shape[:2]
-		scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-		if scale >= 1.0:
-			return image
-		new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-		return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
 
 	def _prepare_output_dir(self, before: Path, after: Path) -> Path:
 		root = Path(__file__).resolve().parent.parent.parent / "results"
@@ -1047,8 +1021,7 @@ class YoloV8SegRunner:
 		return self._sanitize_folder_component(f"{before_parent}_and_{after_parent}")
 
 	def _sanitize_folder_component(self, value: str) -> str:
-		safe = value.strip().replace("/", "_").replace("\\", "_").replace(":", "-")
-		return safe or "pair"
+		return sanitize_folder_component(value)
 
 	def _save_artifacts(
 		self,
@@ -1067,15 +1040,10 @@ class YoloV8SegRunner:
 			"preview": output_dir / "preview.png",
 		}
 
-		self._write_image(paths["before_overlay"], before_overlay)
-		self._write_image(paths["after_overlay"], after_overlay)
-		self._write_image(paths["before_masks"], before_mask_canvas)
-		self._write_image(paths["after_masks"], after_mask_canvas)
-		self._write_image(paths["preview"], preview)
+		write_image(paths["before_overlay"], before_overlay)
+		write_image(paths["after_overlay"], after_overlay)
+		write_image(paths["before_masks"], before_mask_canvas)
+		write_image(paths["after_masks"], after_mask_canvas)
+		write_image(paths["preview"], preview)
 
 		return paths
-
-	def _write_image(self, path: Path, image: np.ndarray) -> None:
-		ok = cv2.imwrite(str(path), image)
-		if not ok:
-			raise RuntimeError(f"Failed to write image: {path}")

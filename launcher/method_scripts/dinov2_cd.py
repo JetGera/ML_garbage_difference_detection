@@ -37,9 +37,11 @@ except Exception as exc:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
+    from ..utils.viz_utils import blend_with_alpha
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
+    from utils.viz_utils import blend_with_alpha
 
 
 DINOV2_CD_CONFIG = {
@@ -137,7 +139,7 @@ class DinoV2CdRunner:
         cleaned_prob_u8 = (np.clip(cleaned_prob_map, 0.0, 1.0) * 255.0).astype(np.uint8)
         cleaned_mask_u8 = (cleaned_mask > 0).astype(np.uint8) * 255
         heatmap = cv2.applyColorMap(probability_u8, int(DINOV2_CD_CONFIG["colormap"]))
-        overlay = self._blend_overlay(aligned_after, heatmap, float(DINOV2_CD_CONFIG["overlay_alpha"]))
+        overlay = blend_with_alpha(aligned_after, heatmap, float(DINOV2_CD_CONFIG["overlay_alpha"]))
         preview = self._compose_preview(aligned_before, aligned_after, heatmap, overlay)
 
         output_dir = self._prepare_output_dir(before, after)
@@ -530,9 +532,6 @@ class DinoV2CdRunner:
         if int(np.count_nonzero(valid)) < 64:
             valid = np.full(gray.shape, True, dtype=bool)
         return float(np.mean(energy[valid]))
-
-    def _blend_overlay(self, image_bgr: np.ndarray, heatmap_bgr: np.ndarray, alpha: float) -> np.ndarray:
-        return cv2.addWeighted(image_bgr, 1.0 - alpha, heatmap_bgr, alpha, 0.0)
 
     def _compose_preview(
         self,
