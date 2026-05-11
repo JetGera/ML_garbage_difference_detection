@@ -28,14 +28,27 @@ try:
 except Exception as exc:  # pragma: no cover - environment specific
     raise RuntimeError("timm is required to train EfficientNet") from exc
 
+try:
+    from .core import select_before_after
+except ImportError:
+    from core import select_before_after
+
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+DEFAULT_CANONICAL_WEIGHTS = Path("results") / "models" / "efficientnet" / "best.pt"
 
 
 @dataclass(frozen=True)
 class Sample:
     path: Path
     label: int
+
+
+@dataclass(frozen=True)
+class PairSample:
+    pair_dir: Path
+    before_path: Path
+    after_path: Path
 
 
 class BinaryImageDataset(Dataset):
@@ -48,9 +61,9 @@ class BinaryImageDataset(Dataset):
 
     def __getitem__(self, index: int):
         sample = self.samples[index]
-        image = Image.open(sample.path)
-        image = ImageOps.exif_transpose(image).convert("RGB")
-        return self.transform(image), sample.label, str(sample.path)
+        with Image.open(sample.path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            return self.transform(image), sample.label, str(sample.path)
 
 
 def discover_images(folder: Path) -> list[Path]:
@@ -61,6 +74,26 @@ def discover_images(folder: Path) -> list[Path]:
 
 def make_samples(folder: Path, label: int) -> list[Sample]:
     return [Sample(path=path, label=label) for path in discover_images(folder)]
+
+
+def discover_pair_dirs(pairs_root: Path) -> list[Path]:
+    if not pairs_root.exists():
+        return []
+    return [path for path in sorted(pairs_root.iterdir(), key=lambda path: path.name.casefold()) if path.is_dir()]
+
+
+def discover_pair_samples(pairs_root: Path) -> list[PairSample]:
+    samples: list[PairSample] = []
+    for pair_dir in discover_pair_dirs(pairs_root):
+        files = [path for path in sorted(pair_dir.iterdir()) if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS]
+        if len(files) < 2:
+            continue
+        before_path, after_path = select_before_after(files)
+        samples.append(PairSample(pair_dir=pair_dir, before_path=before_path, after_path=after_path))
+
+    if not samples:
+        raise RuntimeError(f"No usable before/after pairs were found under {pairs_root}")
+    return samples
 
 
 def resolve_taco_annotations_path(taco_root: Path) -> Path | None:
@@ -188,6 +221,71 @@ def prepare_taco_binary_dataset(
     return train_clean_dir, train_dirty_dir, val_clean_dir, val_dirty_dir, metadata
 
 
+def prepare_pair_binary_dataset(
+    pairs_root: Path,
+    output_root: Path,
+    val_fraction: float,
+    seed: int,
+    export_max_side: int,
+) -> tuple[Path, Path, Path, Path, dict[str, object]]:
+    samples = discover_pair_samples(pairs_root)
+
+    signature_payload = {
+        "pairs_root": str(pairs_root.resolve()),
+        "pairs_root_mtime": round(pairs_root.stat().st_mtime, 6),
+        "val_fraction": float(val_fraction),
+        "seed": int(seed),
+        "split_strategy": "pair_level",
+    }
+    signature = hashlib.sha1(json.dumps(signature_payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    prepared_root = output_root / f"pairs_binary_dataset__{signature}"
+    train_clean_dir = prepared_root / "train" / "clean"
+    train_dirty_dir = prepared_root / "train" / "dirty"
+    val_clean_dir = prepared_root / "val" / "clean"
+    val_dirty_dir = prepared_root / "val" / "dirty"
+    metadata_path = prepared_root / "metadata.json"
+
+    if (
+        metadata_path.exists()
+        and train_clean_dir.exists()
+        and train_dirty_dir.exists()
+        and val_clean_dir.exists()
+        and val_dirty_dir.exists()
+    ):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("signature") == signature:
+                return train_clean_dir, train_dirty_dir, val_clean_dir, val_dirty_dir, metadata
+        except Exception:
+            pass
+
+    train_clean_dir.mkdir(parents=True, exist_ok=True)
+    train_dirty_dir.mkdir(parents=True, exist_ok=True)
+    val_clean_dir.mkdir(parents=True, exist_ok=True)
+    val_dirty_dir.mkdir(parents=True, exist_ok=True)
+
+    train_pairs, val_pairs = _split_pair_samples(samples, val_fraction, seed)
+
+    train_stats = _export_pair_subset(train_pairs, train_dirty_dir, train_clean_dir, export_max_side)
+    val_stats = _export_pair_subset(val_pairs, val_dirty_dir, val_clean_dir, export_max_side)
+
+    metadata = {
+        "signature": signature,
+        "pairs_root": str(pairs_root),
+        "split_strategy": "pair_level",
+        "val_fraction": float(val_fraction),
+        "export_max_side": int(export_max_side),
+        "source_pairs": len(samples),
+        "train_pair_count": len(train_pairs),
+        "val_pair_count": len(val_pairs),
+        "train": train_stats,
+        "val": val_stats,
+    }
+
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    return train_clean_dir, train_dirty_dir, val_clean_dir, val_dirty_dir, metadata
+
+
 def _split_taco_images(images: list[dict[str, object]], val_fraction: float, seed: int) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if not images:
         return [], []
@@ -202,6 +300,60 @@ def _split_taco_images(images: list[dict[str, object]], val_fraction: float, see
         train_images = val_images[:1]
         val_images = val_images[1:]
     return train_images, val_images
+
+
+def _split_pair_samples(samples: list[PairSample], val_fraction: float, seed: int) -> tuple[list[PairSample], list[PairSample]]:
+    if not samples:
+        return [], []
+
+    rng = random.Random(seed)
+    shuffled = samples[:]
+    rng.shuffle(shuffled)
+    val_count = max(1, int(round(len(shuffled) * val_fraction))) if len(shuffled) > 1 else 0
+    val_samples = shuffled[:val_count]
+    train_samples = shuffled[val_count:]
+    if not train_samples:
+        train_samples = val_samples[:1]
+        val_samples = val_samples[1:]
+    return train_samples, val_samples
+
+
+def _resize_export_image(image: Image.Image, max_side: int) -> Image.Image:
+    if max_side <= 0:
+        return image
+    if max(image.size) <= max_side:
+        return image
+    resized = image.copy()
+    resized.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    return resized
+
+
+def _export_pair_subset(pairs: list[PairSample], dirty_dir: Path, clean_dir: Path, max_side: int) -> dict[str, object]:
+    stats: dict[str, object] = {
+        "source_pairs": 0,
+        "dirty_samples": 0,
+        "clean_samples": 0,
+        "missing_images": 0,
+    }
+
+    for pair in pairs:
+        if not pair.before_path.exists() or not pair.after_path.exists():
+            stats["missing_images"] = int(stats["missing_images"]) + 1
+            continue
+
+        dirty_name = f"{pair.pair_dir.name}__before__dirty{pair.before_path.suffix.lower()}"
+        clean_name = f"{pair.pair_dir.name}__after__clean{pair.after_path.suffix.lower()}"
+        with Image.open(pair.before_path) as before_image:
+            before_export = _resize_export_image(ImageOps.exif_transpose(before_image).convert("RGB"), max_side)
+            before_export.save(dirty_dir / dirty_name)
+        with Image.open(pair.after_path) as after_image:
+            after_export = _resize_export_image(ImageOps.exif_transpose(after_image).convert("RGB"), max_side)
+            after_export.save(clean_dir / clean_name)
+        stats["source_pairs"] = int(stats["source_pairs"]) + 1
+        stats["dirty_samples"] = int(stats["dirty_samples"]) + 1
+        stats["clean_samples"] = int(stats["clean_samples"]) + 1
+
+    return stats
 
 
 def _export_taco_subset(
@@ -457,14 +609,18 @@ def build_transforms(image_size: int):
             transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0), ratio=(0.8, 1.25)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(8),
-            transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.10, hue=0.03),
+            transforms.ColorJitter(brightness=0.18, contrast=0.18, saturation=0.12, hue=0.04),
+            transforms.RandomAutocontrast(p=0.20),
+            transforms.RandomGrayscale(p=0.08),
+            transforms.RandomPerspective(distortion_scale=0.12, p=0.15),
             transforms.ToTensor(),
+            transforms.RandomErasing(p=0.12, scale=(0.01, 0.05), ratio=(0.3, 3.0), value=0),
             transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ]
     )
     val_transform = transforms.Compose(
         [
-            transforms.Resize(int(image_size * 1.14)),
+            transforms.Resize(int(image_size * 1.18)),
             transforms.CenterCrop(image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
@@ -535,6 +691,49 @@ def make_output_dir(base_dir: Path, run_name: str) -> Path:
     output_dir = base_dir / f"{timestamp}__{safe_run_name}__{suffix}"
     output_dir.mkdir(parents=True, exist_ok=False)
     return output_dir
+
+
+def sync_canonical_checkpoint(source: Path, target: Path, metadata: dict[str, object]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(source.read_bytes())
+    manifest_path = target.with_suffix(".json")
+    manifest = {
+        "source_checkpoint": str(source),
+        "canonical_checkpoint": str(target),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "metadata": _to_json_safe(metadata),
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _to_json_safe(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _to_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def load_checkpoint(path: Path) -> dict[str, object]:
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, dict) or "state_dict" not in payload:
+        raise RuntimeError(f"Unexpected checkpoint payload in {path}")
+    return payload
+
+
+def apply_checkpoint_args(args: argparse.Namespace, checkpoint: dict[str, object]) -> None:
+    train_args = checkpoint.get("train_args") if isinstance(checkpoint, dict) else None
+    if not isinstance(train_args, dict):
+        train_args = {}
+    args.model_name = str(train_args.get("model_name", checkpoint.get("model_name", args.model_name)))
+    args.image_size = int(train_args.get("image_size", checkpoint.get("image_size", args.image_size)))
 
 
 def build_model(model_name: str, device: torch.device) -> nn.Module:
@@ -661,26 +860,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=Path("results") / "training", help="Root directory for training runs")
     parser.add_argument("--run-name", type=str, default="efficientnet_cls", help="Human-readable run name")
     parser.add_argument("--model-name", type=str, default="efficientnet_b0", help="timm model name")
-    parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--pairs-root", type=Path, default=None, help="Optional root folder containing your own before/after pair subfolders")
+    parser.add_argument("--pairs-export-max-side", type=int, default=768, help="Max side length used when exporting own pairs to training folders")
+    parser.add_argument("--image-size", type=int, default=320)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--epochs", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-workers", type=int, default=2)
-    parser.add_argument("--freeze-backbone-epochs", type=int, default=0)
-    parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--freeze-backbone-epochs", type=int, default=2)
+    parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--force-cpu", action="store_true")
+    parser.add_argument("--eval-only", action="store_true", help="Run evaluation on the validation split and skip training")
+    parser.add_argument(
+        "--weights-in",
+        type=Path,
+        default=DEFAULT_CANONICAL_WEIGHTS,
+        help="Checkpoint to load for eval-only (defaults to canonical best.pt)",
+    )
     parser.add_argument("--weights-out", type=Path, default=None, help="Explicit checkpoint path for best.pt")
+    parser.add_argument("--canonical-weights-out", type=Path, default=DEFAULT_CANONICAL_WEIGHTS, help="Stable checkpoint path used by the GUI after training")
     args = parser.parse_args()
 
-    if args.taco_root is None and (args.clean_dir is None or args.dirty_dir is None):
-        parser.error("either --taco-root or both --clean-dir and --dirty-dir must be provided")
+    if args.taco_root is None and args.pairs_root is None and (args.clean_dir is None or args.dirty_dir is None):
+        parser.error("provide --pairs-root, or --taco-root, or both --clean-dir and --dirty-dir")
 
-    if args.taco_root is not None and (args.clean_dir is not None or args.dirty_dir is not None):
+    if args.taco_root is not None and (args.clean_dir is not None or args.dirty_dir is not None or args.pairs_root is not None):
         print("TACO mode is enabled; manual clean/dirty directories will be ignored.")
+
+    if args.pairs_root is not None and (args.clean_dir is not None or args.dirty_dir is not None):
+        print("Pair mode is enabled; manual clean/dirty directories will be ignored.")
 
     return args
 
@@ -699,7 +911,15 @@ def main() -> None:
     args = parse_args()
     set_seed(args.seed)
 
+    checkpoint: dict[str, object] | None = None
+    if args.eval_only:
+        if not args.weights_in.exists():
+            raise RuntimeError(f"Checkpoint not found: {args.weights_in}")
+        checkpoint = load_checkpoint(args.weights_in)
+        apply_checkpoint_args(args, checkpoint)
+
     taco_metadata: dict[str, object] | None = None
+    pair_metadata: dict[str, object] | None = None
     if args.taco_root is not None:
         prepared_dataset_root = args.output_root / "prepared_datasets"
         clean_dir, dirty_dir, val_clean_dir, val_dirty_dir, taco_metadata = prepare_taco_binary_dataset(
@@ -711,6 +931,15 @@ def main() -> None:
             clean_overlap_threshold=args.taco_clean_overlap_threshold,
             val_fraction=args.val_fraction,
             seed=args.seed,
+        )
+    elif args.pairs_root is not None:
+        prepared_dataset_root = args.output_root / "prepared_datasets"
+        clean_dir, dirty_dir, val_clean_dir, val_dirty_dir, pair_metadata = prepare_pair_binary_dataset(
+            pairs_root=args.pairs_root,
+            output_root=prepared_dataset_root,
+            val_fraction=args.val_fraction,
+            seed=args.seed,
+            export_max_side=args.pairs_export_max_side,
         )
     else:
         clean_dir = args.clean_dir
@@ -774,7 +1003,7 @@ def main() -> None:
     epochs_without_improvement = 0
 
     metadata = {
-        "dataset_mode": "taco_binary" if args.taco_root is not None else "manual_folders",
+        "dataset_mode": "taco_binary" if args.taco_root is not None else ("pair_binary" if args.pairs_root is not None else "manual_folders"),
         "train_count": len(train_samples),
         "val_count": len(val_samples),
         "class_counts_train": class_counts.tolist(),
@@ -783,8 +1012,33 @@ def main() -> None:
         "val_clean_dir": str(val_clean_dir) if val_clean_dir else None,
         "val_dirty_dir": str(val_dirty_dir) if val_dirty_dir else None,
         "taco_root": str(args.taco_root) if args.taco_root else None,
+        "pairs_root": str(args.pairs_root) if args.pairs_root else None,
         "taco_metadata": taco_metadata,
+        "pair_metadata": pair_metadata,
     }
+
+    if args.eval_only:
+        if checkpoint is not None:
+            model.load_state_dict(checkpoint["state_dict"], strict=True)
+        val_loss, val_targets, val_probs = evaluate(model, val_loader, criterion, device)
+        val_metrics = binary_metrics(val_targets, val_probs)
+        summary = {
+            "mode": "eval_only",
+            "weights_in": str(args.weights_in),
+            "val_loss": round(val_loss, 6),
+            "val_metrics": _to_json_safe(val_metrics),
+            "metadata": metadata,
+            "output_dir": str(output_dir),
+        }
+        metrics_path = output_dir / "metrics.json"
+        summary_path = output_dir / "summary.json"
+        metrics_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(
+            f"Eval only | val_loss={val_loss:.4f} val_f1_dirty={val_metrics['f1_dirty']:.4f} val_auc={val_metrics['roc_auc']:.4f}"
+        )
+        print(f"Output dir: {output_dir}")
+        return
 
     for epoch in range(1, args.epochs + 1):
         if args.freeze_backbone_epochs > 0 and epoch == args.freeze_backbone_epochs + 1:
@@ -843,6 +1097,7 @@ def main() -> None:
         "best_epoch": best_epoch,
         "best_val_f1_dirty": best_f1,
         "best_checkpoint": str(best_path),
+        "canonical_checkpoint": str(args.canonical_weights_out),
         "last_checkpoint": str(last_path),
         "output_dir": str(output_dir),
         "metadata": metadata,
@@ -851,8 +1106,11 @@ def main() -> None:
     metrics_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    sync_canonical_checkpoint(best_path, args.canonical_weights_out, {**metadata, "best_epoch": best_epoch, "best_f1_dirty": best_f1})
+
     print()
     print(f"Best checkpoint: {best_path}")
+    print(f"Canonical checkpoint: {args.canonical_weights_out}")
     print(f"Last checkpoint: {last_path}")
     print(f"Output dir: {output_dir}")
     print(f"Set EFFICIENTNET_CLS_WEIGHTS={best_path}")

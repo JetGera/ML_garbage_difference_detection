@@ -17,9 +17,11 @@ import numpy as np
 
 try:
     import torch
+    from torch import nn
     TORCH_IMPORT_ERROR: str | None = None
 except Exception as exc:
     torch = None
+    nn = None
     TORCH_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 try:
@@ -42,19 +44,25 @@ CHANGEFORMER_CONFIG = {
     "backbone_name": "pvt_v2_b0",
     # Fallback transformer backbone when the primary one cannot be loaded.
     "fallback_backbone_name": "mobilevitv2_100",
+    # Optional env var that points to a supervised ChangeFormer checkpoint.
+    "weights_env_var": "CHANGEFORMER_WEIGHTS",
+    # Canonical checkpoint path used by the GUI when a trained model exists.
+    "canonical_weights_path": "results/models/changeformer/best.pt",
+    # Decoder width used by the supervised segmentation model.
+    "decoder_channels": 128,
     # Side length for transformer inference.
     "input_size": 512,
     # Percentile used to convert the probability map into a binary change mask.
-    "threshold_percentile": 90.0,
+    "threshold_percentile": 93.0,
     # Additional threshold offset relative to Otsu on probability values.
-    "otsu_threshold_offset": 0.02,
+    "otsu_threshold_offset": 0.05,
     # Morphology and component filtering settings for the final mask.
-    "morph_kernel": (5, 5),
-    "morph_open_iterations": 1,
+    "morph_kernel": (7, 7),
+    "morph_open_iterations": 2,
     "morph_close_iterations": 1,
-    "overlap_erode_kernel": 7,
-    "min_component_area_px": 200,
-    "min_component_area_ratio": 0.0015,
+    "overlap_erode_kernel": 9,
+    "min_component_area_px": 320,
+    "min_component_area_ratio": 0.0022,
     "min_component_width_px": 10,
     "min_component_height_px": 8,
     "max_component_aspect_ratio": 8.0,
@@ -77,20 +85,20 @@ CHANGEFORMER_CONFIG = {
     ),
     "alignment_downscale_max_side": 1400,
     # If aligned pair consistency is too low, suppress detections for precision.
-    "min_scene_consistency_for_detection": 0.50,
+    "min_scene_consistency_for_detection": 0.62,
     # Fusion weights for transformer and photometric maps.
-    "transformer_map_weight": 0.78,
-    "photometric_map_weight": 0.22,
+    "transformer_map_weight": 0.84,
+    "photometric_map_weight": 0.16,
     # Test-time augmentation for transformer inference.
     "enable_tta": True,
     "tta_scales": (0.85, 1.0, 1.15),
     "tta_horizontal_flip": True,
     # Suppress edge-dominated noise (tree branches, texture flicker).
-    "edge_suppression_weight": 0.16,
+    "edge_suppression_weight": 0.22,
     # Confidence filters for connected components.
-    "min_component_mean_prob": 0.42,
-    "min_component_peak_prob": 0.60,
-    "max_component_area_ratio": 0.12,
+    "min_component_mean_prob": 0.48,
+    "min_component_peak_prob": 0.68,
+    "max_component_area_ratio": 0.10,
     "min_component_center_y_ratio": 0.30,
     "top_region_peak_override": 0.88,
     # Relaxed rescue rule for compact high-confidence detections in the upper image region.
@@ -98,6 +106,205 @@ CHANGEFORMER_CONFIG = {
     "top_region_relaxed_min_mean_prob": 0.50,
     "top_region_relaxed_max_area_ratio": 0.015,
 }
+
+
+if nn is not None and timm is not None:
+
+    def _make_group_norm(num_channels: int):
+        groups = min(32, max(1, int(num_channels)))
+        while groups > 1 and int(num_channels) % groups != 0:
+            groups -= 1
+        return nn.GroupNorm(groups, int(num_channels))
+
+
+    class ChangeFormerSegmentationModel(nn.Module):
+        def __init__(
+            self,
+            backbone_name: str = str(CHANGEFORMER_CONFIG["backbone_name"]),
+            decoder_channels: int = int(CHANGEFORMER_CONFIG["decoder_channels"]),
+            dropout: float = 0.10,
+        ):
+            super().__init__()
+            self.backbone_name = str(backbone_name)
+            self.decoder_channels = int(decoder_channels)
+            self.dropout = float(dropout)
+
+            self.backbone, self.model_source = self._create_backbone(self.backbone_name)
+            feature_channels = self._feature_channels()
+            if not feature_channels:
+                raise RuntimeError(f"Backbone {self.model_source} did not expose feature channels")
+
+            self.level_blocks = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Conv2d(int(channels) * 3, self.decoder_channels, kernel_size=1, bias=False),
+                        _make_group_norm(self.decoder_channels),
+                        nn.ReLU(inplace=True),
+                        nn.Conv2d(self.decoder_channels, self.decoder_channels, kernel_size=3, padding=1, bias=False),
+                        _make_group_norm(self.decoder_channels),
+                        nn.ReLU(inplace=True),
+                    )
+                    for channels in feature_channels
+                ]
+            )
+            self.fusion_head = nn.Sequential(
+                nn.Conv2d(self.decoder_channels, self.decoder_channels, kernel_size=3, padding=1, bias=False),
+                _make_group_norm(self.decoder_channels),
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(self.dropout),
+                nn.Conv2d(self.decoder_channels, 1, kernel_size=1),
+            )
+
+        def _create_backbone(self, backbone_name: str) -> tuple[Any, str]:
+            requested = str(backbone_name)
+            fallback = str(CHANGEFORMER_CONFIG["fallback_backbone_name"])
+            for candidate_name in (requested, fallback):
+                for pretrained in (True, False):
+                    try:
+                        backbone = timm.create_model(candidate_name, pretrained=pretrained, features_only=True)
+                        source = candidate_name if pretrained else f"{candidate_name}_scratch"
+                        return backbone, source
+                    except Exception:
+                        continue
+            raise RuntimeError(f"Unable to create a ChangeFormer backbone from {requested}")
+
+        def _feature_channels(self) -> list[int]:
+            feature_info = getattr(self.backbone, "feature_info", None)
+            if feature_info is None:
+                return []
+            channels = feature_info.channels() if hasattr(feature_info, "channels") else []
+            return [int(channel) for channel in channels]
+
+        def _extract_feature_list(self, outputs) -> list[Any]:
+            features: list[Any] = []
+            if isinstance(outputs, (list, tuple)):
+                for item in outputs:
+                    if torch.is_tensor(item):
+                        features.append(item)
+                return features
+
+            if isinstance(outputs, dict):
+                for item in outputs.values():
+                    if torch.is_tensor(item):
+                        features.append(item)
+                return features
+
+            if torch.is_tensor(outputs):
+                return [outputs]
+
+            return []
+
+        def forward(self, before_tensor, after_tensor):
+            before_features = self._extract_feature_list(self.backbone(before_tensor))
+            after_features = self._extract_feature_list(self.backbone(after_tensor))
+            level_count = min(len(before_features), len(after_features), len(self.level_blocks))
+            if level_count == 0:
+                raise RuntimeError("ChangeFormer backbone did not return any aligned feature levels")
+
+            reference_size = None
+            for feature in before_features[:level_count]:
+                feature_size = (int(feature.shape[-2]), int(feature.shape[-1]))
+                if reference_size is None:
+                    reference_size = feature_size
+                    continue
+                if feature_size[0] * feature_size[1] > reference_size[0] * reference_size[1]:
+                    reference_size = feature_size
+
+            fused = None
+            for index in range(level_count):
+                before_level = before_features[index]
+                after_level = after_features[index]
+                if before_level.shape[-2:] != after_level.shape[-2:]:
+                    target_h = min(int(before_level.shape[-2]), int(after_level.shape[-2]))
+                    target_w = min(int(before_level.shape[-1]), int(after_level.shape[-1]))
+                    before_level = torch.nn.functional.interpolate(
+                        before_level,
+                        size=(target_h, target_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    after_level = torch.nn.functional.interpolate(
+                        after_level,
+                        size=(target_h, target_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+
+                diff = torch.cat(
+                    [
+                        before_level,
+                        after_level,
+                        torch.abs(before_level - after_level),
+                    ],
+                    dim=1,
+                )
+                level_map = self.level_blocks[index](diff)
+                if reference_size is not None and level_map.shape[-2:] != reference_size:
+                    level_map = torch.nn.functional.interpolate(
+                        level_map,
+                        size=reference_size,
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                fused = level_map if fused is None else fused + level_map
+
+            logits = self.fusion_head(fused)
+            logits = torch.nn.functional.interpolate(
+                logits,
+                size=(int(before_tensor.shape[-2]), int(before_tensor.shape[-1])),
+                mode="bilinear",
+                align_corners=False,
+            )
+            return logits
+
+
+else:
+
+    class ChangeFormerSegmentationModel:  # pragma: no cover - only used when torch/timm are unavailable
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("torch and timm are required for ChangeFormer training or supervised inference")
+
+
+def _strip_state_dict_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in state_dict.items():
+        new_key = key[7:] if key.startswith("module.") else key
+        sanitized[new_key] = value
+    return sanitized
+
+
+def _torch_load_checkpoint(path: Path, map_location: Any):
+    if torch is None:
+        raise RuntimeError("torch is not installed")
+
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
+def resolve_latest_changeformer_checkpoint() -> Path | None:
+    project_root = Path(__file__).resolve().parent.parent.parent
+
+    canonical_checkpoint = project_root / str(CHANGEFORMER_CONFIG["canonical_weights_path"])
+    if canonical_checkpoint.exists():
+        return canonical_checkpoint
+
+    training_root = project_root / "results" / "training"
+    if not training_root.exists():
+        return None
+
+    best_candidates = [path for path in training_root.rglob("best.pt") if path.is_file()]
+    if not best_candidates:
+        return None
+
+    best_candidates.sort(
+        key=lambda path: (
+            0 if "changeformer" in path.as_posix().lower() else 1,
+            -path.stat().st_mtime,
+        )
+    )
+    return best_candidates[0]
 
 
 class ChangeformerRunner:
@@ -119,9 +326,11 @@ class ChangeformerRunner:
         self.input_size = int(input_size or CHANGEFORMER_CONFIG["input_size"])
         self.threshold_percentile = float(threshold_percentile or CHANGEFORMER_CONFIG["threshold_percentile"])
         # Kept for API compatibility with other runners.
-        self.weights_path = Path(weights_path) if weights_path is not None else None
+        self.weights_path = self._resolve_weights_path(weights_path)
 
         self._feature_model = None
+        self._supervised_model = None
+        self._supervised_model_source = None
         self._model_source = None
         self._torch_available = torch is not None and timm is not None
         self._inference_mode = "transformer_features" if self._torch_available else "cv_fallback"
@@ -145,7 +354,7 @@ class ChangeformerRunner:
                     aligned_before,
                     aligned_after,
                 )
-                self._inference_mode = "transformer_features"
+                self._inference_mode = "trained_checkpoint" if self.weights_path is not None else "transformer_features"
             except Exception as exc:
                 probability_map, inference_ms = self._predict_change_map_cv_fallback(aligned_before, aligned_after)
                 device_used = "cpu"
@@ -525,6 +734,27 @@ class ChangeformerRunner:
         if torch is None or timm is None:
             raise RuntimeError("torch/timm are not installed in the active environment")
 
+        if self.weights_path is not None:
+            device_obj, device_used = self._resolve_device()
+            model, backbone_used = self._load_supervised_model(device_obj)
+            start = perf_counter()
+            tta_maps: list[np.ndarray] = []
+            tta_scales = CHANGEFORMER_CONFIG["tta_scales"] if CHANGEFORMER_CONFIG.get("enable_tta", False) else (1.0,)
+
+            for scale in tta_scales:
+                side = max(128, int(round(self.input_size * float(scale))))
+                tta_maps.append(self._infer_supervised_map_single(model, device_obj, before_img, after_img, side=side, hflip=False))
+                if bool(CHANGEFORMER_CONFIG.get("tta_horizontal_flip", False)):
+                    tta_maps.append(self._infer_supervised_map_single(model, device_obj, before_img, after_img, side=side, hflip=True))
+
+            if not tta_maps:
+                raise RuntimeError("No supervised ChangeFormer TTA maps were generated")
+
+            map_np = np.mean(np.stack(tta_maps, axis=0), axis=0).astype(np.float32)
+            map_np = self._apply_edge_suppression(map_np, before_img, after_img)
+            inference_ms = (perf_counter() - start) * 1000.0
+            return map_np, inference_ms, device_used, backbone_used
+
         device_obj, device_used = self._resolve_device()
         model, backbone_used = self._load_feature_model(device_obj)
 
@@ -552,6 +782,88 @@ class ChangeformerRunner:
         map_np = self._apply_edge_suppression(map_np, before_img, after_img)
         inference_ms = (perf_counter() - start) * 1000.0
         return map_np, inference_ms, device_used, backbone_used
+
+    def _resolve_weights_path(self, weights_path: str | Path | None) -> Path | None:
+        if weights_path is not None:
+            return Path(weights_path)
+
+        env_value = os.environ.get(str(CHANGEFORMER_CONFIG["weights_env_var"]))
+        if env_value:
+            return Path(env_value)
+
+        return resolve_latest_changeformer_checkpoint()
+
+    def _load_supervised_model(self, device_obj) -> tuple[Any, str]:
+        if self._supervised_model is not None and self._supervised_model_source is not None:
+            self._supervised_model = self._supervised_model.to(device_obj)
+            self._supervised_model.eval()
+            return self._supervised_model, str(self._supervised_model_source)
+
+        if self.weights_path is None:
+            raise RuntimeError("No ChangeFormer checkpoint is available")
+
+        checkpoint = _torch_load_checkpoint(self.weights_path, map_location=device_obj)
+        if isinstance(checkpoint, dict):
+            state_dict = checkpoint.get("state_dict") or checkpoint.get("model_state_dict") or checkpoint.get("model") or checkpoint
+            backbone_name = str(checkpoint.get("backbone_name") or self.backbone_name)
+            decoder_channels = int(checkpoint.get("decoder_channels") or CHANGEFORMER_CONFIG["decoder_channels"])
+            dropout = float(checkpoint.get("dropout") or 0.10)
+        else:
+            state_dict = checkpoint
+            backbone_name = self.backbone_name
+            decoder_channels = int(CHANGEFORMER_CONFIG["decoder_channels"])
+            dropout = 0.10
+
+        if not isinstance(state_dict, dict):
+            raise RuntimeError(f"Unsupported checkpoint payload in {self.weights_path}")
+
+        model = ChangeFormerSegmentationModel(
+            backbone_name=backbone_name,
+            decoder_channels=decoder_channels,
+            dropout=dropout,
+        )
+        model.load_state_dict(_strip_state_dict_prefix(state_dict), strict=True)
+        model = model.to(device_obj).eval()
+        self._supervised_model = model
+        self._supervised_model_source = self.weights_path
+        return model, str(self.weights_path)
+
+    def _infer_supervised_map_single(
+        self,
+        model,
+        device_obj,
+        before_img: np.ndarray,
+        after_img: np.ndarray,
+        side: int,
+        hflip: bool,
+    ) -> np.ndarray:
+        if torch is None:
+            raise RuntimeError("torch is not installed")
+
+        if hflip:
+            before_work = cv2.flip(before_img, 1)
+            after_work = cv2.flip(after_img, 1)
+        else:
+            before_work = before_img
+            after_work = after_img
+
+        before_tensor = self._preprocess_for_model(before_work, side=side).to(device_obj)
+        after_tensor = self._preprocess_for_model(after_work, side=side).to(device_obj)
+
+        with torch.no_grad():
+            logits = model(before_tensor, after_tensor)
+            probability = torch.sigmoid(logits)
+
+        probability = torch.nn.functional.interpolate(
+            probability,
+            size=(before_work.shape[0], before_work.shape[1]),
+            mode="bilinear",
+            align_corners=False,
+        )
+        map_np = probability[0, 0].detach().float().cpu().numpy().astype(np.float32)
+        if hflip:
+            map_np = cv2.flip(map_np, 1)
+        return np.clip(map_np, 0.0, 1.0)
 
     def _infer_transformer_map_single(
         self,

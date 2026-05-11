@@ -90,7 +90,7 @@ class LauncherApp(tk.Tk):
 
         self.folder_var = tk.StringVar(value="")
         self.method_var = tk.StringVar(value=METHODS[0])
-        self.status_var = tk.StringVar(value="Выберите папку с парой фото и запустите анализ.")
+        self.status_var = tk.StringVar(value="Choose a folder with an image pair and start the analysis.")
 
         self.before_text_label: tk.Text | None = None
         self.after_text_label: tk.Text | None = None
@@ -122,20 +122,20 @@ class LauncherApp(tk.Tk):
 
         folder_row = ttk.Frame(top)
         folder_row.pack(fill="x", pady=(0, 8))
-        ttk.Label(folder_row, text="Папка с парой фото:", width=20).pack(side="left")
+        ttk.Label(folder_row, text="Image pair folder:", width=20).pack(side="left")
         ttk.Entry(folder_row, textvariable=self.folder_var).pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(folder_row, text="Выбрать", command=self.choose_folder).pack(side="left")
+        ttk.Button(folder_row, text="Browse", command=self.choose_folder).pack(side="left")
 
         method_row = ttk.Frame(top)
         method_row.pack(fill="x", pady=(0, 8))
-        ttk.Label(method_row, text="Метод:", width=20).pack(side="left")
+        ttk.Label(method_row, text="Method:", width=20).pack(side="left")
         method_combo = ttk.Combobox(method_row, textvariable=self.method_var, values=METHODS, state="readonly")
         method_combo.pack(side="left", fill="x", expand=True)
         method_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_method_hint())
 
         action_row = ttk.Frame(top)
         action_row.pack(fill="x", pady=(0, 8))
-        ttk.Button(action_row, text="Запустить анализ", command=self.run_analysis).pack(side="left")
+        ttk.Button(action_row, text="Run analysis", command=self.run_analysis).pack(side="left")
         ttk.Label(action_row, textvariable=self.status_var).pack(side="left", padx=12)
 
         self.method_hint = ttk.Label(top, text="")
@@ -157,15 +157,15 @@ class LauncherApp(tk.Tk):
         text_grid.rowconfigure(0, weight=1)
         text_grid.rowconfigure(1, weight=1)
 
-        self.before_text_label = self._make_text_panel(text_grid, "До", 0, 0)
-        self.after_text_label = self._make_text_panel(text_grid, "После", 0, 1)
-        self._make_preview_panel(text_grid, "Результат", 1, 0, colspan=2)
+        self.before_text_label = self._make_text_panel(text_grid, "Before", 0, 0)
+        self.after_text_label = self._make_text_panel(text_grid, "After", 0, 1)
+        self._make_preview_panel(text_grid, "Result", 1, 0, colspan=2)
 
-        result_frame = ttk.LabelFrame(right, text="Результаты", padding=8)
+        result_frame = ttk.LabelFrame(right, text="Results", padding=8)
         result_frame.pack(fill="both", expand=True)
         result_toolbar = ttk.Frame(result_frame)
         result_toolbar.pack(fill="x", pady=(0, 6))
-        ttk.Button(result_toolbar, text="Скопировать текст", command=self.copy_results_text).pack(side="left")
+        ttk.Button(result_toolbar, text="Copy text", command=self.copy_results_text).pack(side="left")
         self.result_text = tk.Text(result_frame, wrap="word", height=30)
         scroll = ttk.Scrollbar(result_frame, command=self.result_text.yview)
         self.result_text.configure(yscrollcommand=scroll.set)
@@ -189,7 +189,7 @@ class LauncherApp(tk.Tk):
         parent.grid_rowconfigure(row, weight=1)
         parent.grid_columnconfigure(column, weight=1)
 
-        self.preview_image_label = tk.Label(frame, text="Здесь появится итоговая карта", anchor="center", justify="center", bg="#111111", fg="white")
+        self.preview_image_label = tk.Label(frame, text="The final map will appear here", anchor="center", justify="center", bg="#111111", fg="white")
         self.preview_image_label.pack(fill="both", expand=True)
         self.preview_caption_label = ttk.Label(frame, text="")
         self.preview_caption_label.pack(fill="x", pady=(6, 0))
@@ -197,39 +197,39 @@ class LauncherApp(tk.Tk):
     def _update_method_hint(self) -> None:
         method_id = self.method_var.get()
         spec = get_method_spec(method_id)
-        self.method_hint.configure(text=f"Текущий метод: {spec.label} | conda env: {spec.env_name}")
+        self.method_hint.configure(text=f"Current method: {spec.label} | conda env: {spec.env_name}")
 
     def choose_folder(self) -> None:
-        folder = filedialog.askdirectory(title="Выберите папку с парой фото")
+        folder = filedialog.askdirectory(title="Choose an image pair folder")
         if folder:
             self.folder_var.set(folder)
-            self.status_var.set("Папка выбрана. Можно запускать анализ.")
+            self.status_var.set("Folder selected. You can start the analysis.")
 
     def run_analysis(self) -> None:
         folder = self.folder_var.get().strip()
         if not folder:
-            messagebox.showwarning("Нет папки", "Сначала выберите папку с изображениями.")
+            messagebox.showwarning("No folder", "Please select a folder with images first.")
             return
 
         path = Path(folder)
         if not path.exists():
-            messagebox.showerror("Ошибка", "Папка не существует.")
+            messagebox.showerror("Error", "The folder does not exist.")
             return
 
         try:
             image_files = list_image_files(path)
         except Exception as exc:
-            messagebox.showerror("Ошибка", str(exc))
+            messagebox.showerror("Error", str(exc))
             return
 
         if len(image_files) < 2:
-            messagebox.showwarning("Мало файлов", "Нужны как минимум 2 изображения в папке.")
+            messagebox.showwarning("Too few files", "At least 2 images are required in the folder.")
             return
 
         before_path, after_path = select_before_after(image_files)
-        self.status_var.set("Анализ запущен...")
+        self.status_var.set("Analysis started...")
         self._set_text(
-            "Выбрана пара для анализа:\n"
+            "Selected pair for analysis:\n"
             f"Before: {before_path.name}\n"
             f"After: {after_path.name}\n\n"
         )
@@ -256,7 +256,7 @@ class LauncherApp(tk.Tk):
 
         conda_exe = _find_conda_exe()
         if conda_exe is None:
-            raise RuntimeError("Не найден conda.exe для запуска метода в его отдельном окружении.")
+            raise RuntimeError("conda.exe was not found for launching the method in its own environment.")
 
         command = [
             str(conda_exe),
@@ -279,7 +279,7 @@ class LauncherApp(tk.Tk):
 
         if not result_file.exists():
             raise RuntimeError(
-                "Worker не создал результат.\n"
+                "The worker did not create a result.\n"
                 f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
             )
 
@@ -291,19 +291,19 @@ class LauncherApp(tk.Tk):
         return _payload_to_result(payload["result"])
 
     def _show_result(self, result) -> None:
-        self.status_var.set(f"Готово: {result.method_name}")
+        self.status_var.set(f"Done: {result.method_name}")
         self._set_text(self._format_result(result))
-        self._set_panel_text(self.before_text_label, f"Файл: {result.before_path.name}\nПуть: {result.before_path}")
-        self._set_panel_text(self.after_text_label, f"Файл: {result.after_path.name}\nПуть: {result.after_path}")
+        self._set_panel_text(self.before_text_label, f"File: {result.before_path.name}\nPath: {result.before_path}")
+        self._set_panel_text(self.after_text_label, f"File: {result.after_path.name}\nPath: {result.after_path}")
         self._set_preview_image(result.preview_image_path)
         if self.preview_caption_label is not None:
             self.preview_caption_label.configure(text=result.preview_text)
         self._open_results_folder(result)
 
     def _show_error(self, exc: Exception, error_text: str) -> None:
-        self.status_var.set("Ошибка во время анализа")
-        self._set_text(f"Ошибка: {exc}\n\n{error_text}")
-        messagebox.showerror("Ошибка анализа", str(exc))
+        self.status_var.set("Analysis error")
+        self._set_text(f"Error: {exc}\n\n{error_text}")
+        messagebox.showerror("Analysis error", str(exc))
 
     def _open_results_folder(self, result) -> None:
         folder: Path | None = None
@@ -381,7 +381,7 @@ class LauncherApp(tk.Tk):
             return
         if image_path is None:
             self.preview_image = None
-            self.preview_image_label.configure(image="", text="Нет изображения для отображения")
+            self.preview_image_label.configure(image="", text="No image to display")
             return
 
         try:
@@ -389,7 +389,7 @@ class LauncherApp(tk.Tk):
             self.preview_image_label.configure(image=self.preview_image, text="")
         except Exception:
             self.preview_image = None
-            self.preview_image_label.configure(image="", text=f"Не удалось открыть preview:\n{image_path}")
+            self.preview_image_label.configure(image="", text=f"Failed to open preview:\n{image_path}")
 
     def _format_result(self, result) -> str:
         method_spec = get_method_spec(result.method_id)
@@ -402,18 +402,18 @@ class LauncherApp(tk.Tk):
             cleanup_block.append(f"Cleanup score: {cleanup_score}")
 
         lines = [
-            f"Метод: {result.method_name}",
+            f"Method: {result.method_name}",
             f"Conda env: {method_spec.env_name}",
             f"Env file: {method_spec.env_file}",
-            f"Кратко: {result.summary}",
+            f"Summary: {result.summary}",
             "",
         ]
         if cleanup_block:
-            lines.append("Оценка очистки:")
+            lines.append("Cleanup score:")
             for item in cleanup_block:
                 lines.append(f"- {item}")
             lines.append("")
-        lines.append("Метрики:")
+        lines.append("Metrics:")
         for key, value in result.metrics.items():
             if key in {"cleanup_delta", "cleanup_score"}:
                 continue
@@ -421,16 +421,9 @@ class LauncherApp(tk.Tk):
         if result.preview_image_path is not None:
             lines.extend(["", f"Preview image: {result.preview_image_path}"])
         if result.artifacts:
-            lines.extend(["", "Артефакты:"])
+            lines.extend(["", "Artifacts:"])
             for key, value in result.artifacts.items():
                 lines.append(f"- {key}: {value}")
-        lines.extend(
-            [
-                "",
-                "Подсказка:",
-                "GUI показывает итоговую картинку результата и список артефактов без смены сценария запуска.",
-            ]
-        )
         return "\n".join(lines)
 
     def _prefs_path(self) -> Path:
