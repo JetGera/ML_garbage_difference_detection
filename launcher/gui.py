@@ -14,10 +14,10 @@ from tkinter import filedialog, messagebox, ttk
 
 try:
     from .core import list_image_files, select_before_after
-    from .methods import METHODS, get_method_spec
+    from .methods import METHODS, get_method_spec, normalize_method_id
 except ImportError:
     from core import list_image_files, select_before_after
-    from methods import METHODS, get_method_spec
+    from methods import METHODS, get_method_spec, normalize_method_id
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -445,12 +445,14 @@ class LauncherApp(tk.Tk):
         method = data.get("method")
         if folder:
             self.folder_var.set(folder)
-        if method and method in METHODS:
-            self.method_var.set(method)
+        if method:
+            normalized_method = normalize_method_id(method)
+            if normalized_method in METHODS:
+                self.method_var.set(normalized_method)
 
     def _save_prefs(self) -> None:
         path = self._prefs_path()
-        data = {"folder": self.folder_var.get() or "", "method": self.method_var.get() or ""}
+        data = {"folder": self.folder_var.get() or "", "method": normalize_method_id(self.method_var.get() or "")}
         try:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:

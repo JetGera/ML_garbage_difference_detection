@@ -23,23 +23,24 @@ class MethodSpec:
 
 
 METHOD_SPECS = {
-    "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "projekt-sift-ransac", CONDA_ENV_DIR / "sift_ransac.yml"),
-    "orb_ransac": MethodSpec("ORB + RANSAC + difference map", "projekt-orb-ransac", CONDA_ENV_DIR / "orb_ransac.yml"),
-    "yolov8_det": MethodSpec("YOLOv8-detection", "projekt-yolov8-det", CONDA_ENV_DIR / "yolov8_det.yml"),
-    "faster_rcnn": MethodSpec("Faster R-CNN", "projekt-faster-rcnn", CONDA_ENV_DIR / "faster_rcnn.yml"),
-    "mask_rcnn": MethodSpec("Mask R-CNN", "projekt-mask-rcnn", CONDA_ENV_DIR / "mask_rcnn.yml"),
-    "yolov8_seg": MethodSpec("YOLOv8-seg", "projekt-yolov8-seg", CONDA_ENV_DIR / "yolov8_seg.yml"),
-    "unet_seg": MethodSpec("U-Net segmentation", "projekt-unet-seg", CONDA_ENV_DIR / "unet_seg.yml"),
-    "deeplabv3plus_seg": MethodSpec("DeepLabV3+ segmentation", "projekt-deeplabv3plus-seg", CONDA_ENV_DIR / "deeplabv3plus_seg.yml"),
-    "segformer_seg": MethodSpec("SegFormer segmentation", "projekt-segformer-seg", CONDA_ENV_DIR / "segformer_seg.yml"),
-    "siamese_unet_cd": MethodSpec("Siamese U-Net change detection", "projekt-siamese-unet-cd", CONDA_ENV_DIR / "siamese_unet_cd.yml"),
-    "bit_like_cd": MethodSpec("BIT-like change detection model", "projekt-bit-like-cd", CONDA_ENV_DIR / "bit_like_cd.yml"),
     "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "changeformer.yml"),
-    "dinov2_cd": MethodSpec("DINOv2 change detection", "projekt-dinov2-cd", CONDA_ENV_DIR / "dinov2_cd.yml"),
-    "open_cd": MethodSpec("Open-CD baseline models", "projekt-open-cd", CONDA_ENV_DIR / "open_cd.yml"),
-    "resnet_cls": MethodSpec("ResNet classifier for clean/dirty", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
-    "efficientnet_cls": MethodSpec("EfficientNet classifier for clean/dirty", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
-    "hybrid_score": MethodSpec("Hybrid score", "projekt-hybrid-score", CONDA_ENV_DIR / "hybrid_score.yml"),
+    "dinov2": MethodSpec("DINOv2", "projekt-dinov2-cd", CONDA_ENV_DIR / "dinov2_cd.yml"),
+    "efficientnet": MethodSpec("EfficientNet", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
+    "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "01_sift", CONDA_ENV_DIR / "sift_ransac.yml"),
+    "siamese_unet": MethodSpec("Siamese U-Net", "projekt-siamese-unet-cd", CONDA_ENV_DIR / "siamese_unet_cd.yml"),
+    "yolov8_seg": MethodSpec("YOLOv8-seg", "projekt-yolov8-seg", CONDA_ENV_DIR / "yolov8_seg.yml"),
+    # "orb_ransac": MethodSpec("ORB + RANSAC + difference map", "projekt-orb-ransac", CONDA_ENV_DIR / "orb_ransac.yml"),
+    # "yolov8_det": MethodSpec("YOLOv8-detection", "projekt-yolov8-det", CONDA_ENV_DIR / "yolov8_det.yml"),
+    # "faster_rcnn": MethodSpec("Faster R-CNN", "projekt-faster-rcnn", CONDA_ENV_DIR / "faster_rcnn.yml"),
+    # "mask_rcnn": MethodSpec("Mask R-CNN", "projekt-mask-rcnn", CONDA_ENV_DIR / "mask_rcnn.yml"),
+    # "unet_seg": MethodSpec("U-Net segmentation", "projekt-unet-seg", CONDA_ENV_DIR / "unet_seg.yml"),
+    # "deeplabv3plus_seg": MethodSpec("DeepLabV3+ segmentation", "projekt-deeplabv3plus-seg", CONDA_ENV_DIR / "deeplabv3plus_seg.yml"),
+    # "segformer_seg": MethodSpec("SegFormer segmentation", "projekt-segformer-seg", CONDA_ENV_DIR / "segformer_seg.yml"),
+    # "siamese_unet_cd": MethodSpec("Siamese U-Net change detection", "projekt-siamese-unet-cd", CONDA_ENV_DIR / "siamese_unet_cd.yml"),
+    # "bit_like_cd": MethodSpec("BIT-like change detection model", "projekt-bit-like-cd", CONDA_ENV_DIR / "bit_like_cd.yml"),
+    # "open_cd": MethodSpec("Open-CD baseline models", "projekt-open-cd", CONDA_ENV_DIR / "open_cd.yml"),
+    # "resnet_cls": MethodSpec("ResNet classifier for clean/dirty", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
+    # "hybrid_score": MethodSpec("Hybrid score", "projekt-hybrid-score", CONDA_ENV_DIR / "hybrid_score.yml"),
 }
 
 METHODS = list(METHOD_SPECS)
@@ -47,8 +48,15 @@ METHOD_LABELS = {method_id: spec.label for method_id, spec in METHOD_SPECS.items
 METHOD_ENV = {method_id: spec.env_name for method_id, spec in METHOD_SPECS.items()}
 METHOD_ENV_FILES = {method_id: spec.env_file for method_id, spec in METHOD_SPECS.items()}
 
+METHOD_ALIASES = {
+    "efficientnet_cls": "efficientnet",
+    "dinov2_cd": "dinov2",
+    "siamese_unet_cd": "siamese_unet",
+}
+
 
 def get_method_spec(method_id: str) -> MethodSpec:
+    method_id = METHOD_ALIASES.get(method_id, method_id)
     try:
         return METHOD_SPECS[method_id]
     except KeyError as exc:
@@ -133,6 +141,8 @@ class ScoredPlaceholderRunner(AlgorithmRunner):
 
 
 def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
+    method_id = METHOD_ALIASES.get(method_id, method_id)
+
     if method_id == "sift_ransac":
         try:
             from .method_scripts.sift_ransac import SiftRansacRunner
@@ -150,6 +160,7 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.sift_ransac import SiftRansacRunner
 
         return SiftRansacRunner(method_id)
+
     if method_id == "yolov8_seg":
         try:
             from .method_scripts.yolov8_seg import YoloV8SegRunner
@@ -166,7 +177,8 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.yolov8_seg import YoloV8SegRunner
 
         return YoloV8SegRunner(method_id, **kwargs)
-    if method_id == "efficientnet_cls":
+
+    if method_id == "efficientnet":
         weights_path = _resolve_latest_efficientnet_checkpoint()
         if weights_path is not None and "weights_path" not in kwargs:
             kwargs["weights_path"] = weights_path
@@ -185,6 +197,7 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.efficientnet_cls import EfficientNetClsRunner
 
         return EfficientNetClsRunner(method_id, **kwargs)
+
     if method_id == "changeformer":
         try:
             from .method_scripts.changeformer import ChangeformerRunner
@@ -201,7 +214,8 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.changeformer import ChangeformerRunner
 
         return ChangeformerRunner(method_id, **kwargs)
-    if method_id == "dinov2_cd":
+
+    if method_id == "dinov2":
         try:
             from .method_scripts.dinov2_cd import DinoV2CdRunner
         except ImportError as exc:
@@ -217,7 +231,8 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.dinov2_cd import DinoV2CdRunner
 
         return DinoV2CdRunner(method_id, **kwargs)
-    if method_id == "siamese_unet_cd":
+
+    if method_id == "siamese_unet":
         try:
             from .method_scripts.siamese_unet_cd import SiameseUnetCdRunner
         except ImportError as exc:
@@ -233,8 +248,10 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.siamese_unet_cd import SiameseUnetCdRunner
 
         return SiameseUnetCdRunner(method_id, **kwargs)
+
     if method_id == "orb_ransac":
         return DifferenceMapRunner(method_id)
+
     if method_id not in METHODS:
         raise KeyError(f"Unknown method: {method_id}")
     return ScoredPlaceholderRunner(method_id)
