@@ -38,74 +38,120 @@ except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
 
+CHANGEFORMER_CONFIG = {
+        # Pyramid Vision Transformer backbone used for feature extraction.
+        "backbone_name": "pvt_v2_b0",
+        # Fallback transformer backbone when the primary one cannot be loaded.
+        "fallback_backbone_name": "mobilevitv2_100",
+        # Optional env var that points to a supervised ChangeFormer checkpoint.
+        "weights_env_var": "CHANGEFORMER_WEIGHTS",
+        # Canonical checkpoint path used by the GUI when a trained model exists.
+        "canonical_weights_path": "results/models/changeformer/best.pt",
+        # Decoder width used by the supervised segmentation model.
+        "decoder_channels": 128,
+        # Side length for transformer inference.
+        "input_size": 512,
+        # Percentile used to convert the probability map into a binary change mask.
+        "threshold_percentile": 93.0,
+        # Additional threshold offset relative to Otsu on probability values.
+        "otsu_threshold_offset": 0.05,
+        # Morphology and component filtering settings for the final mask.
+        "morph_kernel": (7, 7),
+        "morph_open_iterations": 2,
+        "morph_close_iterations": 1,
+        "overlap_erode_kernel": 9,
+        "min_component_area_px": 320,
+        "min_component_area_ratio": 0.0022,
+        "min_component_width_px": 10,
+        "min_component_height_px": 8,
+        "max_component_aspect_ratio": 8.0,
+        "drop_border_components": True,
+        "border_margin_px": 4,
+        # Rendering settings.
+        "colormap": cv2.COLORMAP_TURBO,
+        "overlay_alpha": 0.58,
+        "panel_title_height": 44,
+        "preview_max_width": 3600,
+        "preview_max_height": 2600,
+        # ECC alignment settings.
+        "ecc_max_iterations": 120,
+        "ecc_eps": 1e-6,
+        "ecc_rotation_candidates": (0, 90, 180, 270),
+        "ecc_motion_models": (
+            cv2.MOTION_HOMOGRAPHY,
+            cv2.MOTION_AFFINE,
+            cv2.MOTION_EUCLIDEAN,
+        ),
+        "alignment_downscale_max_side": 1400,
+        # If aligned pair consistency is too low, suppress detections for precision.
+        "min_scene_consistency_for_detection": 0.62,
+        # Fusion weights for transformer and photometric maps.
+        "transformer_map_weight": 0.84,
+        "photometric_map_weight": 0.16,
+        # Test-time augmentation for transformer inference.
+        "enable_tta": True,
+        "tta_scales": (0.85, 1.0, 1.15),
+        "tta_horizontal_flip": True,
+        # Suppress edge-dominated noise (tree branches, texture flicker).
+        "edge_suppression_weight": 0.22,
+        # Confidence filters for connected components.
+        "min_component_mean_prob": 0.48,
+        "min_component_peak_prob": 0.68,
+        "max_component_area_ratio": 0.10,
+        "min_component_center_y_ratio": 0.30,
+        "top_region_peak_override": 0.88,
+        # Relaxed rescue rule for compact high-confidence detections in the upper image region.
+        "top_region_relaxed_peak_prob": 0.74,
+        "top_region_relaxed_min_mean_prob": 0.50,
+        "top_region_relaxed_max_area_ratio": 0.015,
+    }
 
 CHANGEFORMER_CONFIG = {
-    # Pyramid Vision Transformer backbone used for feature extraction.
-    "backbone_name": "pvt_v2_b0",
-    # Fallback transformer backbone when the primary one cannot be loaded.
-    "fallback_backbone_name": "mobilevitv2_100",
-    # Optional env var that points to a supervised ChangeFormer checkpoint.
-    "weights_env_var": "CHANGEFORMER_WEIGHTS",
-    # Canonical checkpoint path used by the GUI when a trained model exists.
-    "canonical_weights_path": "results/models/changeformer/best.pt",
-    # Decoder width used by the supervised segmentation model.
-    "decoder_channels": 128,
-    # Side length for transformer inference.
-    "input_size": 512,
-    # Percentile used to convert the probability map into a binary change mask.
-    "threshold_percentile": 93.0,
-    # Additional threshold offset relative to Otsu on probability values.
-    "otsu_threshold_offset": 0.05,
-    # Morphology and component filtering settings for the final mask.
-    "morph_kernel": (7, 7),
-    "morph_open_iterations": 2,
-    "morph_close_iterations": 1,
-    "overlap_erode_kernel": 9,
-    "min_component_area_px": 320,
-    "min_component_area_ratio": 0.0022,
-    "min_component_width_px": 10,
-    "min_component_height_px": 8,
-    "max_component_aspect_ratio": 8.0,
-    "drop_border_components": True,
-    "border_margin_px": 4,
-    # Rendering settings.
-    "colormap": cv2.COLORMAP_TURBO,
-    "overlay_alpha": 0.58,
-    "panel_title_height": 44,
-    "preview_max_width": 3600,
-    "preview_max_height": 2600,
-    # ECC alignment settings.
-    "ecc_max_iterations": 120,
-    "ecc_eps": 1e-6,
-    "ecc_rotation_candidates": (0, 90, 180, 270),
-    "ecc_motion_models": (
-        cv2.MOTION_HOMOGRAPHY,
-        cv2.MOTION_AFFINE,
-        cv2.MOTION_EUCLIDEAN,
-    ),
-    "alignment_downscale_max_side": 1400,
-    # If aligned pair consistency is too low, suppress detections for precision.
-    "min_scene_consistency_for_detection": 0.62,
-    # Fusion weights for transformer and photometric maps.
-    "transformer_map_weight": 0.84,
-    "photometric_map_weight": 0.16,
-    # Test-time augmentation for transformer inference.
-    "enable_tta": True,
-    "tta_scales": (0.85, 1.0, 1.15),
-    "tta_horizontal_flip": True,
-    # Suppress edge-dominated noise (tree branches, texture flicker).
-    "edge_suppression_weight": 0.22,
-    # Confidence filters for connected components.
-    "min_component_mean_prob": 0.48,
-    "min_component_peak_prob": 0.68,
-    "max_component_area_ratio": 0.10,
-    "min_component_center_y_ratio": 0.30,
-    "top_region_peak_override": 0.88,
-    # Relaxed rescue rule for compact high-confidence detections in the upper image region.
-    "top_region_relaxed_peak_prob": 0.74,
-    "top_region_relaxed_min_mean_prob": 0.50,
-    "top_region_relaxed_max_area_ratio": 0.015,
-}
+        "backbone_name": "pvt_v2_b0",
+        "fallback_backbone_name": "mobilevitv2_100",
+        "weights_env_var": "CHANGEFORMER_WEIGHTS",
+        "canonical_weights_path": "results/models/changeformer/best.pt",
+        "decoder_channels": 128,
+        "input_size": 512,
+        "threshold_percentile": 93.0,
+        "otsu_threshold_offset": 0.05,
+        # Morphology and connected-component filtering defaults
+        "morph_kernel": (5, 5),
+        "morph_open_iterations": 1,
+        "morph_close_iterations": 2,
+        "min_component_area_px": 64,
+        "min_component_area_ratio": 0.0005,
+        "min_component_width_px": 6,
+        "min_component_height_px": 6,
+        "max_component_aspect_ratio": 6.0,
+        "max_component_area_ratio": 0.25,
+        "min_component_center_y_ratio": 0.08,
+        "top_region_peak_override": 0.80,
+        "top_region_relaxed_peak_prob": 0.65,
+        "top_region_relaxed_min_mean_prob": 0.45,
+        "top_region_relaxed_max_area_ratio": 0.05,
+        "min_component_mean_prob": 0.30,
+        "min_component_peak_prob": 0.45,
+        "drop_border_components": True,
+        "border_margin_px": 8,
+        "colormap": 2,
+        "overlay_alpha": 0.5,
+        "preview_max_width": 1024,
+        "preview_max_height": 1024,
+        # ECC/alignment defaults
+        "ecc_rotation_candidates": (0, 90, 180, 270),
+        "ecc_motion_models": (cv2.MOTION_HOMOGRAPHY, cv2.MOTION_AFFINE, cv2.MOTION_EUCLIDEAN),
+        "ecc_max_iterations": 2500,
+        "ecc_eps": 1e-6,
+        "alignment_downscale_max_side": 800,
+        # TTA / transformer weights
+        "tta_scales": (1.0,),
+        "enable_tta": False,
+        "tta_horizontal_flip": False,
+        "transformer_map_weight": 0.7,
+        "photometric_map_weight": 0.3,
+        "edge_suppression_weight": 0.0,
+    }
 
 
 if nn is not None and timm is not None:
@@ -263,9 +309,7 @@ else:
     class ChangeFormerSegmentationModel:  # pragma: no cover - only used when torch/timm are unavailable
         def __init__(self, *args, **kwargs):
             raise RuntimeError("torch and timm are required for ChangeFormer training or supervised inference")
-
-
-def _strip_state_dict_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
+            def _strip_state_dict_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, value in state_dict.items():
         new_key = key[7:] if key.startswith("module.") else key

@@ -13,3 +13,4 @@ yolo26n.pt
 README.md
 /.idea
 /Garbage Pairs Dataset
+launcher/utils/__pycache__/

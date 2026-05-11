@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import cv2
 import numpy as np
+
+try:
+	from ..utils.io_utils import prepare_output_dir, sanitize_folder_component, write_image
+	from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask
+	from ..utils.viz_utils import annotate_panel, resize_if_too_large
+except ImportError:
+	from utils.io_utils import prepare_output_dir, sanitize_folder_component, write_image
+	from utils.alignment_utils import build_validity_mask, compute_overlap_mask
+	from utils.viz_utils import annotate_panel, resize_if_too_large
 
 # Method 01 (SIFT + RANSAC) config block.
 # `nfeatures`: maximum number of SIFT keypoints to keep.
@@ -29,15 +36,29 @@ SIFT_CONFIG = {
 # `min_homography_area_ratio`: minimum warped area vs. source area accepted as sane.
 # `max_homography_area_ratio`: maximum warped area vs. source area accepted as sane.
 ALIGNMENT_CONFIG = {
-	"ratio_test": 0.60,  # Stricter: only keep very confident matches
-	"ransac_reproj_threshold": 2.0,  # Tighter RANSAC tolerance
-	"min_matches_for_homography": 12,  # Require more matches for homography
+	"ratio_test": 0.70,  # Balanced default for moderate view-angle changes
+	"ratio_test_relaxed": 0.82,  # Secondary pass when strict matching is insufficient
+	"ratio_test_emergency": 0.90,  # Last-resort pass for hard pairs; RANSAC gates bad geometry
+	"ransac_reproj_threshold": 3.5,  # More tolerant for handheld capture drift/rotation
+	"min_matches_for_homography": 10,
+	"min_inliers_for_homography": 10,
+	"min_inlier_ratio": 0.22,
+	"feature_roi_enabled": True,
+	"feature_roi_top_fraction": 0.03,
+	"feature_roi_bottom_fraction": 0.00,
+	"feature_roi_left_fraction": 0.00,
+	"feature_roi_right_fraction": 0.18,
+	"ecc_refine_enabled": True,
+	"ecc_iterations": 80,
+	"ecc_eps": 1e-5,
+	"ecc_gauss_size": 5,
+	"ecc_min_correlation": 0.55,
 	"min_overlap_ratio": 0.2,
 	"max_canvas_side": 8000,
 	"max_perspective_shear": 0.0001,  # Extremely strict in config (override below)
 	"min_homography_area_ratio": 0.35,
 	"max_homography_area_ratio": 3.0,
-	"max_affine_rotation_degrees": 6.0,
+	"max_affine_rotation_degrees": 18.0,
 	"min_affine_scale_ratio": 0.85,
 	"max_affine_scale_ratio": 1.15,
 }
@@ -91,11 +112,25 @@ except ImportError:
 
 class SiftRansacRunner:
 	RATIO_TEST = ALIGNMENT_CONFIG["ratio_test"]
+	RATIO_TEST_RELAXED = ALIGNMENT_CONFIG["ratio_test_relaxed"]
+	RATIO_TEST_EMERGENCY = ALIGNMENT_CONFIG["ratio_test_emergency"]
 	RANSAC_REPROJ_THRESHOLD = ALIGNMENT_CONFIG["ransac_reproj_threshold"]
 	MIN_MATCHES_FOR_HOMOGRAPHY = ALIGNMENT_CONFIG["min_matches_for_homography"]
+	MIN_INLIERS_FOR_HOMOGRAPHY = ALIGNMENT_CONFIG["min_inliers_for_homography"]
+	MIN_INLIER_RATIO = ALIGNMENT_CONFIG["min_inlier_ratio"]
+	FEATURE_ROI_ENABLED = ALIGNMENT_CONFIG["feature_roi_enabled"]
+	FEATURE_ROI_TOP_FRACTION = ALIGNMENT_CONFIG["feature_roi_top_fraction"]
+	FEATURE_ROI_BOTTOM_FRACTION = ALIGNMENT_CONFIG["feature_roi_bottom_fraction"]
+	FEATURE_ROI_LEFT_FRACTION = ALIGNMENT_CONFIG["feature_roi_left_fraction"]
+	FEATURE_ROI_RIGHT_FRACTION = ALIGNMENT_CONFIG["feature_roi_right_fraction"]
+	ECC_REFINE_ENABLED = ALIGNMENT_CONFIG["ecc_refine_enabled"]
+	ECC_ITERATIONS = ALIGNMENT_CONFIG["ecc_iterations"]
+	ECC_EPS = ALIGNMENT_CONFIG["ecc_eps"]
+	ECC_GAUSS_SIZE = ALIGNMENT_CONFIG["ecc_gauss_size"]
+	ECC_MIN_CORRELATION = ALIGNMENT_CONFIG["ecc_min_correlation"]
 	MIN_OVERLAP_RATIO = ALIGNMENT_CONFIG["min_overlap_ratio"]
 	MAX_CANVAS_SIDE = ALIGNMENT_CONFIG["max_canvas_side"]
-	MAX_PERSPECTIVE_SHEAR = 0.00025  # Much stricter: prevents any significant rotation/skew
+	MAX_PERSPECTIVE_SHEAR = 0.0015  # Allow mild perspective effects from viewpoint changes
 	MIN_HOMOGRAPHY_AREA_RATIO = ALIGNMENT_CONFIG["min_homography_area_ratio"]
 	MAX_HOMOGRAPHY_AREA_RATIO = ALIGNMENT_CONFIG["max_homography_area_ratio"]
 	MAX_AFFINE_ROTATION_DEGREES = ALIGNMENT_CONFIG["max_affine_rotation_degrees"]
@@ -149,6 +184,7 @@ class SiftRansacRunner:
 
 		metrics = {
 			"alignment_mode": align_info["alignment_mode"],
+			"fallback_reason": str(align_info.get("fallback_reason", "none")),
 			"keypoints_before": int(align_info["keypoints_before"]),
 			"keypoints_after": int(align_info["keypoints_after"]),
 			"raw_matches": int(align_info["raw_matches"]),
@@ -164,9 +200,11 @@ class SiftRansacRunner:
 		}
 
 		summary = "SIFT matching + RANSAC alignment on a shared canvas, then difference map in overlap area only."
+		fallback_reason = metrics["fallback_reason"]
 		preview_text = (
 			f"Alignment: {metrics['alignment_mode']}\n"
 			f"Good matches: {good_matches}, inliers: {inliers}\n"
+			f"Fallback reason: {fallback_reason}\n"
 			f"Overlap ratio: {metrics['overlap_ratio']:.4f}, change ratio: {change_ratio:.4f}"
 		)
 
@@ -199,12 +237,15 @@ class SiftRansacRunner:
 		after_gray = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY)
 		before_feat = self._enhance_for_features(before_gray)
 		after_feat = self._enhance_for_features(after_gray)
+		before_roi = self._build_feature_roi_mask(before_gray.shape)
+		after_roi = self._build_feature_roi_mask(after_gray.shape)
 
-		kp_before, desc_before = sift.detectAndCompute(before_feat, None)
-		kp_after, desc_after = sift.detectAndCompute(after_feat, None)
+		kp_before, desc_before = sift.detectAndCompute(before_feat, before_roi)
+		kp_after, desc_after = sift.detectAndCompute(after_feat, after_roi)
 
 		info: dict[str, Any] = {
 			"alignment_mode": "identity_fallback",
+			"fallback_reason": "none",
 			"keypoints_before": len(kp_before),
 			"keypoints_after": len(kp_after),
 			"raw_matches": 0,
@@ -213,35 +254,45 @@ class SiftRansacRunner:
 		}
 
 		if desc_before is None or desc_after is None:
+			info["fallback_reason"] = "missing_descriptors"
 			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
 			return aligned_before, aligned_after, overlap_mask, info, None
+
+		desc_before = self._to_rootsift(desc_before)
+		desc_after = self._to_rootsift(desc_after)
 
 		matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
 		raw_matches = matcher.knnMatch(desc_before, desc_after, k=2)
 		info["raw_matches"] = len(raw_matches)
 
-		good_matches: list[cv2.DMatch] = []
-		for pair in raw_matches:
-			if len(pair) < 2:
-				continue
-			first, second = pair
-			if first.distance < self.RATIO_TEST * second.distance:
-				good_matches.append(first)
+		good_matches = self._ratio_filter_matches(raw_matches, self.RATIO_TEST)
+		if len(good_matches) < self.MIN_MATCHES_FOR_HOMOGRAPHY:
+			relaxed_matches = self._ratio_filter_matches(raw_matches, self.RATIO_TEST_RELAXED)
+			if len(relaxed_matches) > len(good_matches):
+				good_matches = relaxed_matches
+		if len(good_matches) < self.MIN_MATCHES_FOR_HOMOGRAPHY:
+			emergency_matches = self._ratio_filter_matches(raw_matches, self.RATIO_TEST_EMERGENCY)
+			if len(emergency_matches) > len(good_matches):
+				good_matches = emergency_matches
 
 		info["good_matches"] = len(good_matches)
 		if len(good_matches) < self.MIN_MATCHES_FOR_HOMOGRAPHY:
 			match_vis = self._draw_matches(before_img, after_img, kp_before, kp_after, good_matches)
+			info["fallback_reason"] = "insufficient_good_matches"
 			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
 			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
 		src_pts = np.float32([kp_after[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 		dst_pts = np.float32([kp_before[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
+		homography_method = cv2.USAC_MAGSAC if hasattr(cv2, "USAC_MAGSAC") else cv2.RANSAC
 		homography, inlier_mask = cv2.findHomography(
 			src_pts,
 			dst_pts,
-			method=cv2.RANSAC,
+			method=homography_method,
 			ransacReprojThreshold=self.RANSAC_REPROJ_THRESHOLD,
+			maxIters=12000,
+			confidence=0.999,
 		)
 
 		match_vis = self._draw_matches(before_img, after_img, kp_before, kp_after, good_matches, inlier_mask)
@@ -252,7 +303,9 @@ class SiftRansacRunner:
 				aligned_before, aligned_after, overlap_mask, affine_info = affine_result
 				info["alignment_mode"] = affine_info["alignment_mode"]
 				info["inliers"] = affine_info["inliers"]
+				info["fallback_reason"] = str(affine_info.get("fallback_reason", "none"))
 				return aligned_before, aligned_after, overlap_mask, info, match_vis
+			info["fallback_reason"] = "homography_estimation_failed"
 			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
 			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
@@ -262,13 +315,30 @@ class SiftRansacRunner:
 				aligned_before, aligned_after, overlap_mask, affine_info = affine_result
 				info["alignment_mode"] = affine_info["alignment_mode"]
 				info["inliers"] = affine_info["inliers"]
+				info["fallback_reason"] = str(affine_info.get("fallback_reason", "none"))
 				return aligned_before, aligned_after, overlap_mask, info, match_vis
+			info["fallback_reason"] = "homography_sanity_failed"
+			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
+			return aligned_before, aligned_after, overlap_mask, info, match_vis
+
+		inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
+		inlier_ratio = float(inliers / max(len(good_matches), 1))
+		if inliers < self.MIN_INLIERS_FOR_HOMOGRAPHY or inlier_ratio < self.MIN_INLIER_RATIO:
+			affine_result = self._align_with_affine(before_img, after_img, good_matches, kp_before, kp_after)
+			if affine_result is not None:
+				aligned_before, aligned_after, overlap_mask, affine_info = affine_result
+				info["alignment_mode"] = affine_info["alignment_mode"]
+				info["inliers"] = affine_info["inliers"]
+				info["fallback_reason"] = str(affine_info.get("fallback_reason", "none"))
+				return aligned_before, aligned_after, overlap_mask, info, match_vis
+			info["fallback_reason"] = "insufficient_homography_inliers"
 			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
 			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
 		try:
 			aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, homography)
 		except ValueError:
+			info["fallback_reason"] = "homography_canvas_invalid"
 			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
 			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
@@ -276,13 +346,46 @@ class SiftRansacRunner:
 		min_overlap = int(before_img.shape[0] * before_img.shape[1] * self.MIN_OVERLAP_RATIO)
 		if overlap_pixels < max(1, min_overlap):
 			info["alignment_mode"] = "low_overlap_fallback"
-			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
+			info["fallback_reason"] = "low_overlap_after_warp"
+			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info, fallback_mode="low_overlap_fallback")
 			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
-		inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
 		info["alignment_mode"] = "homography_ransac"
+		info["fallback_reason"] = "none"
 		info["inliers"] = inliers
 		return aligned_before, aligned_after, overlap_mask, info, match_vis
+
+	def _build_feature_roi_mask(self, image_shape: tuple[int, ...]) -> np.ndarray | None:
+		if not self.FEATURE_ROI_ENABLED:
+			return None
+		h, w = image_shape[:2]
+		x0 = int(np.clip(round(w * self.FEATURE_ROI_LEFT_FRACTION), 0, max(w - 1, 0)))
+		x1 = int(np.clip(round(w * (1.0 - self.FEATURE_ROI_RIGHT_FRACTION)), 1, w))
+		y0 = int(np.clip(round(h * self.FEATURE_ROI_TOP_FRACTION), 0, max(h - 1, 0)))
+		y1 = int(np.clip(round(h * (1.0 - self.FEATURE_ROI_BOTTOM_FRACTION)), 1, h))
+		if x1 - x0 < 32 or y1 - y0 < 32:
+			return None
+		mask = np.zeros((h, w), dtype=np.uint8)
+		mask[y0:y1, x0:x1] = 255
+		return mask
+
+	def _ratio_filter_matches(self, raw_matches: list[list[cv2.DMatch]], ratio: float) -> list[cv2.DMatch]:
+		filtered: list[cv2.DMatch] = []
+		for pair in raw_matches:
+			if len(pair) < 2:
+				continue
+			first, second = pair
+			if first.distance < ratio * second.distance:
+				filtered.append(first)
+		return filtered
+
+	def _to_rootsift(self, descriptors: np.ndarray) -> np.ndarray:
+		if descriptors is None or descriptors.size == 0:
+			return descriptors
+		desc = descriptors.astype(np.float32, copy=False)
+		l1 = np.sum(np.abs(desc), axis=1, keepdims=True)
+		desc = desc / np.maximum(l1, 1e-12)
+		return np.sqrt(desc)
 
 	def _is_homography_sane(self, before_img: np.ndarray, after_img: np.ndarray, homography: np.ndarray) -> bool:
 		if homography.shape != (3, 3):
@@ -385,7 +488,7 @@ class SiftRansacRunner:
 		)
 
 		before_valid = cv2.warpPerspective(
-			np.full((before_h, before_w), 255, dtype=np.uint8),
+			build_validity_mask((before_h, before_w)),
 			translation,
 			(canvas_w, canvas_h),
 			flags=cv2.INTER_NEAREST,
@@ -393,14 +496,14 @@ class SiftRansacRunner:
 			borderValue=0,
 		)
 		after_valid = cv2.warpPerspective(
-			np.full((after_h, after_w), 255, dtype=np.uint8),
+			build_validity_mask((after_h, after_w)),
 			affine_full,
 			(canvas_w, canvas_h),
 			flags=cv2.INTER_NEAREST,
 			borderMode=cv2.BORDER_CONSTANT,
 			borderValue=0,
 		)
-		overlap_mask = cv2.bitwise_and(before_valid, after_valid)
+		overlap_mask = compute_overlap_mask(before_valid, after_valid)
 		union_mask = cv2.bitwise_or(before_valid, after_valid)
 		non_zero_points = cv2.findNonZero(union_mask)
 		if non_zero_points is not None:
@@ -412,8 +515,76 @@ class SiftRansacRunner:
 		affine_info = {
 			"alignment_mode": "affine_ransac",
 			"inliers": int(inlier_mask.sum()) if inlier_mask is not None else 0,
+			"fallback_reason": "none",
 		}
+
+		if self.ECC_REFINE_ENABLED:
+			ecc_result = self._refine_with_ecc(aligned_before, aligned_after, overlap_mask)
+			if ecc_result is not None:
+				refined_after, refined_overlap, corr = ecc_result
+				aligned_after = refined_after
+				overlap_mask = refined_overlap
+				affine_info["alignment_mode"] = "affine_ecc"
+				affine_info["ecc_correlation"] = round(float(corr), 4)
 		return aligned_before, aligned_after, overlap_mask, affine_info
+
+	def _refine_with_ecc(
+		self,
+		before_img: np.ndarray,
+		after_img: np.ndarray,
+		overlap_mask: np.ndarray,
+	) -> tuple[np.ndarray, np.ndarray, float] | None:
+		if before_img.shape[:2] != after_img.shape[:2]:
+			return None
+		if int(np.count_nonzero(overlap_mask)) < 512:
+			return None
+
+		template = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+		input_gray = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+		warp = np.eye(2, 3, dtype=np.float32)
+		criteria = (
+			cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+			int(self.ECC_ITERATIONS),
+			float(self.ECC_EPS),
+		)
+
+		try:
+			corr, warp = cv2.findTransformECC(
+				template,
+				input_gray,
+				warp,
+				cv2.MOTION_AFFINE,
+				criteria,
+				overlap_mask,
+				int(self.ECC_GAUSS_SIZE),
+			)
+		except cv2.error:
+			return None
+
+		if not np.isfinite(corr) or corr < self.ECC_MIN_CORRELATION:
+			return None
+
+		h, w = after_img.shape[:2]
+		refined_after = cv2.warpAffine(
+			after_img,
+			warp,
+			(w, h),
+			flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+			borderMode=cv2.BORDER_CONSTANT,
+			borderValue=(0, 0, 0),
+		)
+		after_valid = cv2.warpAffine(
+			np.full((h, w), 255, dtype=np.uint8),
+			warp,
+			(w, h),
+			flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+			borderMode=cv2.BORDER_CONSTANT,
+			borderValue=0,
+		)
+		refined_overlap = cv2.bitwise_and(overlap_mask, after_valid)
+		if int(np.count_nonzero(refined_overlap)) < 512:
+			return None
+		return refined_after, refined_overlap, float(corr)
 
 	def _is_affine_sane(self, affine: np.ndarray) -> bool:
 		if affine.shape != (2, 3):
@@ -462,14 +633,19 @@ class SiftRansacRunner:
 		before_img: np.ndarray,
 		after_img: np.ndarray,
 		info: dict[str, Any],
+		fallback_mode: str | None = None,
 	) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 		before_shape = before_img.shape[:2]
 		after_shape = after_img.shape[:2]
+		if fallback_mode is not None:
+			info["alignment_mode"] = fallback_mode
 		if before_shape != after_shape:
-			info["alignment_mode"] = "resize_fallback"
+			if fallback_mode is None:
+				info["alignment_mode"] = "resize_fallback"
 			aligned_after = cv2.resize(after_img, (before_img.shape[1], before_img.shape[0]), interpolation=cv2.INTER_LINEAR)
 		else:
-			info["alignment_mode"] = "identity_fallback"
+			if fallback_mode is None:
+				info["alignment_mode"] = "identity_fallback"
 			aligned_after = after_img.copy()
 		overlap_mask = np.full(before_shape, 255, dtype=np.uint8)
 		return before_img.copy(), aligned_after, overlap_mask
@@ -528,7 +704,7 @@ class SiftRansacRunner:
 		)
 
 		before_valid = cv2.warpPerspective(
-			np.full((before_h, before_w), 255, dtype=np.uint8),
+			build_validity_mask((before_h, before_w)),
 			before_homography,
 			(canvas_w, canvas_h),
 			flags=cv2.INTER_NEAREST,
@@ -536,14 +712,14 @@ class SiftRansacRunner:
 			borderValue=0,
 		)
 		after_valid = cv2.warpPerspective(
-			np.full((after_h, after_w), 255, dtype=np.uint8),
+			build_validity_mask((after_h, after_w)),
 			after_homography,
 			(canvas_w, canvas_h),
 			flags=cv2.INTER_NEAREST,
 			borderMode=cv2.BORDER_CONSTANT,
 			borderValue=0,
 		)
-		overlap_mask = cv2.bitwise_and(before_valid, after_valid)
+		overlap_mask = compute_overlap_mask(before_valid, after_valid)
 
 		union_mask = cv2.bitwise_or(before_valid, after_valid)
 		non_zero_points = cv2.findNonZero(union_mask)
@@ -566,19 +742,42 @@ class SiftRansacRunner:
 	) -> np.ndarray | None:
 		if not good_matches:
 			return None
-		matches_mask = None
-		if inlier_mask is not None:
-			matches_mask = inlier_mask.ravel().astype(int).tolist()
-		return cv2.drawMatches(
+		max_draw = 250
+		sorted_good = sorted(good_matches, key=lambda m: m.distance)
+		display_good = sorted_good[:max_draw]
+
+		good_vis = cv2.drawMatches(
 			before_img,
 			kp_before,
 			after_img,
 			kp_after,
-			good_matches,
+			display_good,
 			None,
-			matchesMask=matches_mask,
 			flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
 		)
+		if inlier_mask is None:
+			return annotate_panel(good_vis, f"Good matches: {len(good_matches)}")
+
+		mask = inlier_mask.ravel().astype(bool)
+		inlier_matches = [match for match, keep in zip(good_matches, mask) if keep]
+		if not inlier_matches:
+			return annotate_panel(good_vis, f"Good matches: {len(good_matches)}")
+
+		sorted_inliers = sorted(inlier_matches, key=lambda m: m.distance)
+		display_inliers = sorted_inliers[:max_draw]
+		inlier_vis = cv2.drawMatches(
+			before_img,
+			kp_before,
+			after_img,
+			kp_after,
+			display_inliers,
+			None,
+			flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+		)
+
+		top = annotate_panel(good_vis, f"Good matches: {len(good_matches)}")
+		bottom = annotate_panel(inlier_vis, f"RANSAC inliers: {len(inlier_matches)}")
+		return np.vstack([top, bottom])
 
 	def _build_change_map(
 		self,
@@ -656,15 +855,15 @@ class SiftRansacRunner:
 		diff_heat = cv2.applyColorMap(diff_gray, int(CHANGE_MAP_CONFIG["colormap"]))
 		change_overlay = self._make_change_overlay(before_img, aligned_after, change_mask)
 
-		panel_before = self._annotate_panel(before_img, "Before (aligned frame)")
-		panel_after = self._annotate_panel(aligned_after, f"After aligned ({alignment_mode})")
-		panel_diff = self._annotate_panel(diff_heat, "Difference heatmap")
-		panel_mask = self._annotate_panel(change_overlay, "Detected changes (Before/After blend)")
+		panel_before = annotate_panel(before_img, "Before (aligned frame)")
+		panel_after = annotate_panel(aligned_after, f"After aligned ({alignment_mode})")
+		panel_diff = annotate_panel(diff_heat, "Difference heatmap")
+		panel_mask = annotate_panel(change_overlay, "Detected changes (Before/After blend)")
 
 		top = np.hstack([panel_before, panel_after])
 		bottom = np.hstack([panel_diff, panel_mask])
 		grid = np.vstack([top, bottom])
-		return self._resize_if_too_large(
+		return resize_if_too_large(
 			grid,
 			max_width=int(PREVIEW_CONFIG["max_width"]),
 			max_height=int(PREVIEW_CONFIG["max_height"]),
@@ -687,29 +886,10 @@ class SiftRansacRunner:
 			cv2.drawContours(overlay, contours, contourIdx=-1, color=(255, 255, 255), thickness=1)
 		return overlay
 
-	def _annotate_panel(self, image: np.ndarray, title: str) -> np.ndarray:
-		panel = image.copy()
-		cv2.rectangle(panel, (0, 0), (panel.shape[1], 44), (0, 0, 0), -1)
-		cv2.putText(panel, title, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-		return panel
-
-	def _resize_if_too_large(self, image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
-		height, width = image.shape[:2]
-		scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
-		if scale >= 1.0:
-			return image
-		new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-		return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
 	def _prepare_output_dir(self, before: Path, after: Path) -> Path:
 		root = Path(__file__).resolve().parent.parent.parent / "results"
 		pair_name = self._pair_folder_name(before, after)
-		method_name = self._sanitize_folder_component(self.label)
-		timestamp = datetime.now().strftime("%d.%m.%Y %H-%M")
-		run_dir_name = f"{pair_name}__{method_name}__{timestamp}__{uuid4().hex[:6]}"
-		output_dir = root / run_dir_name
-		output_dir.mkdir(parents=True, exist_ok=True)
-		return output_dir
+		return prepare_output_dir(root, pair_name, self.label)
 
 	def _pair_folder_name(self, before: Path, after: Path) -> str:
 		before_parent = before.parent.name.strip() or "pair"
@@ -721,8 +901,7 @@ class SiftRansacRunner:
 		return self._sanitize_folder_component(f"{before_parent}_and_{after_parent}")
 
 	def _sanitize_folder_component(self, value: str) -> str:
-		safe = value.strip().replace("/", "_").replace("\\", "_").replace(":", "-")
-		return safe or "pair"
+		return sanitize_folder_component(value)
 
 	def _save_artifacts(
 		self,
@@ -744,21 +923,17 @@ class SiftRansacRunner:
 			"preview": output_dir / "preview.png",
 		}
 
-		self._write_image(paths["aligned_before"], aligned_before)
-		self._write_image(paths["aligned_after"], aligned_after)
-		self._write_image(paths["difference_gray"], diff_gray)
-		self._write_image(paths["change_mask"], change_mask)
-		self._write_image(paths["overlap_mask"], overlap_mask)
-		self._write_image(paths["preview"], preview)
+		write_image(paths["aligned_before"], aligned_before)
+		write_image(paths["aligned_after"], aligned_after)
+		write_image(paths["difference_gray"], diff_gray)
+		write_image(paths["change_mask"], change_mask)
+		write_image(paths["overlap_mask"], overlap_mask)
+		write_image(paths["preview"], preview)
 
 		if match_vis is not None:
 			match_path = output_dir / "feature_matches.png"
-			self._write_image(match_path, match_vis)
+			write_image(match_path, match_vis)
 			paths["feature_matches"] = match_path
 
 		return paths
 
-	def _write_image(self, path: Path, image: np.ndarray) -> None:
-		ok = cv2.imwrite(str(path), image)
-		if not ok:
-			raise RuntimeError(f"Failed to write image: {path}")

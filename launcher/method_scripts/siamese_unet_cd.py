@@ -6,9 +6,11 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
+    from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+    from utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 import cv2
 import numpy as np
 
@@ -268,54 +270,20 @@ class SiameseUnetCdRunner:
 
     def _align_after_to_before(self, before_img: np.ndarray, after_img: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
         before_h, before_w = before_img.shape[:2]
-        if (before_h, before_w) != after_img.shape[:2]:
-            after_img = cv2.resize(after_img, (before_w, before_h), interpolation=cv2.INTER_LINEAR)
+        ecc_result = try_ecc_alignment(
+            before_img,
+            after_img,
+            motion_type=cv2.MOTION_AFFINE,
+            max_iterations=int(SIAMESE_UNET_CD_CONFIG["ecc_max_iterations"]),
+            eps=float(SIAMESE_UNET_CD_CONFIG["ecc_eps"]),
+            erode_kernel=(5, 5),
+            allow_crop=True,
+        )
+        if ecc_result is not None:
+            return before_img, ecc_result["aligned_after"], ecc_result["overlap_mask"], "ecc_affine"
 
-        try:
-            gray_before = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-            gray_after = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-            criteria = (
-                cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
-                int(SIAMESE_UNET_CD_CONFIG["ecc_max_iterations"]),
-                float(SIAMESE_UNET_CD_CONFIG["ecc_eps"]),
-            )
-            cv2.findTransformECC(gray_before, gray_after, warp_matrix, cv2.MOTION_AFFINE, criteria)
-            aligned_after = cv2.warpAffine(
-                after_img,
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(0, 0, 0),
-            )
-            # Compute valid support after warping to avoid border artifacts being treated as change.
-            valid_before = np.full((before_h, before_w), 255, dtype=np.uint8)
-            valid_after = np.full((before_h, before_w), 255, dtype=np.uint8)
-            valid_after = cv2.warpAffine(
-                valid_after,
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
-            overlap_mask = cv2.bitwise_and(valid_before, valid_after)
-            overlap_mask = cv2.erode(overlap_mask, np.ones((5, 5), dtype=np.uint8), iterations=1)
-            
-            # Crop to valid region (remove black borders) like SIFT RANSAC does
-            union_mask = cv2.bitwise_or(valid_before, valid_after)
-            non_zero_points = cv2.findNonZero(union_mask)
-            if non_zero_points is not None:
-                x, y, w, h = cv2.boundingRect(non_zero_points)
-                before_img = before_img[y : y + h, x : x + w]
-                aligned_after = aligned_after[y : y + h, x : x + w]
-                overlap_mask = overlap_mask[y : y + h, x : x + w]
-            
-            return before_img, aligned_after, overlap_mask, "ecc_affine"
-        except Exception:
-            overlap_mask = np.full((before_h, before_w), 255, dtype=np.uint8)
-            return before_img, after_img, overlap_mask, "resize_fallback"
+        overlap_mask = build_validity_mask((before_h, before_w))
+        return before_img, after_img if (before_h, before_w) == after_img.shape[:2] else cv2.resize(after_img, (before_w, before_h), interpolation=cv2.INTER_LINEAR), overlap_mask, "resize_fallback"
 
     def _predict_change_map(self, before_img: np.ndarray, after_img: np.ndarray) -> _PairPrediction:
         if torch is None or nn is None:

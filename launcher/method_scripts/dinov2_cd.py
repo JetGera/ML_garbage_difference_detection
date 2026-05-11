@@ -6,9 +6,11 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
+    from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 from uuid import uuid4
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    from utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 
 import cv2
 import numpy as np
@@ -211,53 +213,25 @@ class DinoV2CdRunner:
 
     def _align_after_to_before(self, before_img: np.ndarray, after_img: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
         before_h, before_w = before_img.shape[:2]
-        if (before_h, before_w) != after_img.shape[:2]:
-            after_img = cv2.resize(after_img, (before_w, before_h), interpolation=cv2.INTER_LINEAR)
         # First try ECC affine alignment (fast, good for small view changes)
-        try:
-            before_gray = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-            after_gray = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-            criteria = (
-                cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
-                int(DINOV2_CD_CONFIG["ecc_max_iterations"]),
-                float(DINOV2_CD_CONFIG["ecc_eps"]),
-            )
-            cv2.findTransformECC(before_gray, after_gray, warp_matrix, cv2.MOTION_AFFINE, criteria)
-            aligned_after = cv2.warpAffine(
-                after_img,
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(0, 0, 0),
-            )
-            valid_before = np.full((before_h, before_w), 255, dtype=np.uint8)
-            valid_after = cv2.warpAffine(
-                np.full((before_h, before_w), 255, dtype=np.uint8),
-                warp_matrix,
-                (before_w, before_h),
-                flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
-            overlap_mask = cv2.bitwise_and(valid_before, valid_after)
-            overlap_mask = cv2.erode(overlap_mask, np.ones((5, 5), dtype=np.uint8), iterations=1)
-
-            # Quick residual check: if residual is high, fall back to feature-based homography
-            residual = float(np.mean(cv2.absdiff(cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY), cv2.cvtColor(aligned_after, cv2.COLOR_BGR2GRAY)).astype(np.float32) / 255.0))
-            if residual < 0.035:
-                return before_img, aligned_after, overlap_mask, "ecc_affine"
-            # else fall through to feature based alignment
-        except Exception:
-            pass
+        ecc_result = try_ecc_alignment(
+            before_img,
+            after_img,
+            motion_type=cv2.MOTION_AFFINE,
+            max_iterations=int(DINOV2_CD_CONFIG["ecc_max_iterations"]),
+            eps=float(DINOV2_CD_CONFIG["ecc_eps"]),
+            min_residual=0.035,
+            erode_kernel=(5, 5),
+            allow_crop=False,
+        )
+        if ecc_result is not None:
+            return before_img, ecc_result["aligned_after"], ecc_result["overlap_mask"], "ecc_affine"
 
         # Feature-based homography fallback (SIFT/ORB + RANSAC)
         try:
             aligned_after, homography, valid_mask = self._feature_align_homography(before_img, after_img)
             if aligned_after is not None:
-                overlap_mask = (valid_mask * 255).astype(np.uint8)
-                overlap_mask = cv2.erode(overlap_mask, np.ones((5, 5), dtype=np.uint8), iterations=1)
+                overlap_mask = compute_overlap_mask(build_validity_mask((before_h, before_w)), (valid_mask * 255).astype(np.uint8), erode_kernel=(5, 5))
                 return before_img, aligned_after, overlap_mask, "homography_ransac"
         except Exception:
             pass
