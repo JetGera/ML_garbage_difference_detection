@@ -37,6 +37,22 @@ Deletes the existing yolov8_seg environment and creates it again.
 .\install-conda-envs.ps1 -ListOnly
 
 Shows which environment names will be used.
+
+.EXAMPLE
+.\install-conda-envs.ps1 -Methods siamese_unet_cd
+
+Installs or updates only the Siamese U-Net change detection environment (with cv2 support for improved inpainting).
+
+.EXAMPLE
+.\install-conda-envs.ps1 -Methods dinov2_cd
+
+Installs or updates only the DINOv2 change detection environment.
+
+.NOTES
+For Siamese U-Net workflow:
+  1. Generate training pairs: python datasets/TACO/build_cd_pairs.py
+  2. Create environment: .\install-conda-envs.ps1 -Methods siamese_unet_cd
+    3. Run inference: python -m launcher.gui (select Siamese U-Net method)
 #>
 [CmdletBinding()]
 param(

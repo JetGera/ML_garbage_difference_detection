@@ -19,6 +19,7 @@
 14. [ResNet classifier для чисто/грязно](14_resnet_classifier_clean_dirty.md)
 15. [EfficientNet classifier для чисто/грязно](15_efficientnet_classifier_clean_dirty.md)
 16. [Гибридный score](16_hybrid_score.md)
+17. [DINOv2 cleanup degree 0-100](17_dinov2.md)
 
 ## Как пользоваться
 1. Сначала пройтись по baseline-методам.

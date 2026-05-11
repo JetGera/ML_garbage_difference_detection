@@ -14,8 +14,8 @@ import numpy as np
 # `clahe_clip_limit`: contrast enhancement strength before feature detection.
 # `clahe_tile_grid`: CLAHE grid size used to normalize local contrast.
 SIFT_CONFIG = {
-	"nfeatures": 75000,
-	"contrast_threshold": 0.02,
+	"nfeatures": 30000,
+	"contrast_threshold": 0.04,
 	"clahe_clip_limit": 2.0,
 	"clahe_tile_grid": (8, 8),
 }
@@ -29,14 +29,17 @@ SIFT_CONFIG = {
 # `min_homography_area_ratio`: minimum warped area vs. source area accepted as sane.
 # `max_homography_area_ratio`: maximum warped area vs. source area accepted as sane.
 ALIGNMENT_CONFIG = {
-	"ratio_test": 0.75,
-	"ransac_reproj_threshold": 4.0,
-	"min_matches_for_homography": 8,
+	"ratio_test": 0.60,  # Stricter: only keep very confident matches
+	"ransac_reproj_threshold": 2.0,  # Tighter RANSAC tolerance
+	"min_matches_for_homography": 12,  # Require more matches for homography
 	"min_overlap_ratio": 0.2,
 	"max_canvas_side": 8000,
-	"max_perspective_shear": 0.0025,
+	"max_perspective_shear": 0.0001,  # Extremely strict in config (override below)
 	"min_homography_area_ratio": 0.35,
 	"max_homography_area_ratio": 3.0,
+	"max_affine_rotation_degrees": 6.0,
+	"min_affine_scale_ratio": 0.85,
+	"max_affine_scale_ratio": 1.15,
 }
 
 # `gaussian_kernel`: blur kernel for smoothing the gray difference map.
@@ -56,6 +59,14 @@ CHANGE_MAP_CONFIG = {
 	"morph_close_iterations": 1,
 	"min_component_area_px": 32,
 	"min_component_area_ratio": 0.0005,
+	# Ignore components that are larger than this fraction of the valid overlap area.
+	# Set to 1.0 to disable (default behavior). Lower values will discard very large
+	# regions (useful to ignore broad illumination/scene differences near image borders).
+	"max_component_area_ratio": 0.15,
+	# Fraction of the image height at the top to ignore detections from. Components
+	# whose top boundary lies within this fraction will be discarded. Set to 0.0 to
+	# disable. Example: 0.25 will ignore components starting within the top 25%.
+	"ignore_top_fraction": 0.25,
 	"min_component_width_px": 0,
 	"min_component_height_px": 0,
 	"colormap": cv2.COLORMAP_INFERNO,
@@ -84,9 +95,12 @@ class SiftRansacRunner:
 	MIN_MATCHES_FOR_HOMOGRAPHY = ALIGNMENT_CONFIG["min_matches_for_homography"]
 	MIN_OVERLAP_RATIO = ALIGNMENT_CONFIG["min_overlap_ratio"]
 	MAX_CANVAS_SIDE = ALIGNMENT_CONFIG["max_canvas_side"]
-	MAX_PERSPECTIVE_SHEAR = ALIGNMENT_CONFIG["max_perspective_shear"]
+	MAX_PERSPECTIVE_SHEAR = 0.00025  # Much stricter: prevents any significant rotation/skew
 	MIN_HOMOGRAPHY_AREA_RATIO = ALIGNMENT_CONFIG["min_homography_area_ratio"]
 	MAX_HOMOGRAPHY_AREA_RATIO = ALIGNMENT_CONFIG["max_homography_area_ratio"]
+	MAX_AFFINE_ROTATION_DEGREES = ALIGNMENT_CONFIG["max_affine_rotation_degrees"]
+	MIN_AFFINE_SCALE_RATIO = ALIGNMENT_CONFIG["min_affine_scale_ratio"]
+	MAX_AFFINE_SCALE_RATIO = ALIGNMENT_CONFIG["max_affine_scale_ratio"]
 
 	def __init__(self, method_id: str):
 		self.method_id = method_id
@@ -231,14 +245,14 @@ class SiftRansacRunner:
 		)
 
 		match_vis = self._draw_matches(before_img, after_img, kp_before, kp_after, good_matches, inlier_mask)
-		affine_result = self._align_with_affine(before_img, after_img, good_matches, kp_before, kp_after)
-		if affine_result is not None:
-			aligned_before, aligned_after, overlap_mask, affine_info = affine_result
-			info["alignment_mode"] = affine_info["alignment_mode"]
-			info["inliers"] = affine_info["inliers"]
-			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
 		if homography is None:
+			affine_result = self._align_with_affine(before_img, after_img, good_matches, kp_before, kp_after)
+			if affine_result is not None:
+				aligned_before, aligned_after, overlap_mask, affine_info = affine_result
+				info["alignment_mode"] = affine_info["alignment_mode"]
+				info["inliers"] = affine_info["inliers"]
+				return aligned_before, aligned_after, overlap_mask, info, match_vis
 			aligned_before, aligned_after, overlap_mask = self._fallback_alignment_pair(before_img, after_img, info)
 			return aligned_before, aligned_after, overlap_mask, info, match_vis
 
@@ -316,6 +330,9 @@ class SiftRansacRunner:
 			ransacReprojThreshold=self.RANSAC_REPROJ_THRESHOLD,
 		)
 		if affine is None:
+			return None
+
+		if not self._is_affine_sane(affine):
 			return None
 
 		before_h, before_w = before_img.shape[:2]
@@ -397,6 +414,31 @@ class SiftRansacRunner:
 			"inliers": int(inlier_mask.sum()) if inlier_mask is not None else 0,
 		}
 		return aligned_before, aligned_after, overlap_mask, affine_info
+
+	def _is_affine_sane(self, affine: np.ndarray) -> bool:
+		if affine.shape != (2, 3):
+			return False
+		if not np.isfinite(affine).all():
+			return False
+
+		linear = affine[:, :2].astype(np.float64)
+		u, singular_values, vt = np.linalg.svd(linear)
+		rotation_matrix = u @ vt
+		rotation_degrees = abs(np.degrees(np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0])))
+		scale_ratio = float((singular_values[0] + singular_values[1]) / 2.0)
+
+		if rotation_degrees > self.MAX_AFFINE_ROTATION_DEGREES:
+			return False
+		if scale_ratio < self.MIN_AFFINE_SCALE_RATIO or scale_ratio > self.MAX_AFFINE_SCALE_RATIO:
+			return False
+
+		# Reject obvious shear by checking how far the linear part deviates from a pure rotation+uniform scale.
+		shear_matrix = np.linalg.inv(rotation_matrix) @ linear
+		off_diag = max(abs(float(shear_matrix[0, 1])), abs(float(shear_matrix[1, 0])))
+		if off_diag > 0.08:
+			return False
+
+		return True
 
 	def _create_sift(self):
 		if hasattr(cv2, "SIFT_create"):
@@ -580,8 +622,26 @@ class SiftRansacRunner:
 			area = int(stats[label, cv2.CC_STAT_AREA])
 			width = int(stats[label, cv2.CC_STAT_WIDTH])
 			height = int(stats[label, cv2.CC_STAT_HEIGHT])
-			# Keep component only if it satisfies area and bounding-box size
-			if area >= min_area and width >= min_width and height >= min_height:
+			left = int(stats[label, cv2.CC_STAT_LEFT])
+			top = int(stats[label, cv2.CC_STAT_TOP])
+
+			# Maximum area guard (relative to valid overlap pixels)
+			max_area_ratio = float(CHANGE_MAP_CONFIG.get("max_component_area_ratio", 1.0))
+			max_area = int(valid_pixels * max_area_ratio)
+
+			# Top-area ignore: discard components whose top lies within the top fraction
+			ignore_top_fraction = float(CHANGE_MAP_CONFIG.get("ignore_top_fraction", 0.0))
+			top_threshold = int(overlap_mask.shape[0] * ignore_top_fraction)
+
+			# Keep component only if it satisfies area and bounding-box size and isn't
+			# too large or entirely starting in the top ignored band.
+			if (
+				area >= min_area
+				and width >= min_width
+				and height >= min_height
+				and area <= max_area
+				and not (ignore_top_fraction > 0.0 and top <= top_threshold)
+			):
 				filtered[labels == label] = 255
 		return filtered
 

@@ -1,5 +1,7 @@
 name: projekt-siamese-unet-cd
 channels:
+  - pytorch
+  - nvidia
   - conda-forge
 dependencies:
   - python=3.11
@@ -7,8 +9,13 @@ dependencies:
   - numpy
   - scipy
   - scikit-image
+  - scikit-learn
   - matplotlib
   - tqdm
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - pytorch-cuda=12.4
   - pip:
-      - torch
-      - torchvision
+      - albumentations
+      - opencv-python
+      - pillow

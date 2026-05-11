@@ -100,6 +100,18 @@ class LauncherApp(tk.Tk):
         self.preview_image: tk.PhotoImage | None = None
 
         self._build_ui()
+        # load saved preferences (last folder and method)
+        try:
+            self._load_prefs()
+        except Exception:
+            # don't fail GUI startup for prefs issues
+            pass
+        # save prefs whenever these vars change
+        try:
+            self.folder_var.trace_add("write", lambda *_args: self._save_prefs())
+            self.method_var.trace_add("write", lambda *_args: self._save_prefs())
+        except Exception:
+            pass
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding=12)
@@ -420,6 +432,37 @@ class LauncherApp(tk.Tk):
             ]
         )
         return "\n".join(lines)
+
+    def _prefs_path(self) -> Path:
+        try:
+            home = Path.home()
+        except Exception:
+            home = PROJECT_ROOT
+        return home / ".projekt_gui_prefs.json"
+
+    def _load_prefs(self) -> None:
+        path = self._prefs_path()
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        folder = data.get("folder")
+        method = data.get("method")
+        if folder:
+            self.folder_var.set(folder)
+        if method and method in METHODS:
+            self.method_var.set(method)
+
+    def _save_prefs(self) -> None:
+        path = self._prefs_path()
+        data = {"folder": self.folder_var.get() or "", "method": self.method_var.get() or ""}
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            # best-effort: ignore write errors
+            pass
 
 def main() -> None:
     app = LauncherApp()

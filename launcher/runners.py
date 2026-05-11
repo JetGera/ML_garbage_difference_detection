@@ -35,6 +35,7 @@ METHOD_SPECS = {
     "siamese_unet_cd": MethodSpec("Siamese U-Net change detection", "projekt-siamese-unet-cd", CONDA_ENV_DIR / "siamese_unet_cd.yml"),
     "bit_like_cd": MethodSpec("BIT-like change detection model", "projekt-bit-like-cd", CONDA_ENV_DIR / "bit_like_cd.yml"),
     "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "changeformer.yml"),
+    "dinov2_cd": MethodSpec("DINOv2 change detection", "projekt-dinov2-cd", CONDA_ENV_DIR / "dinov2_cd.yml"),
     "open_cd": MethodSpec("Open-CD baseline models", "projekt-open-cd", CONDA_ENV_DIR / "open_cd.yml"),
     "resnet_cls": MethodSpec("ResNet classifier для чисто/грязно", "projekt-resnet-cls", CONDA_ENV_DIR / "resnet_cls.yml"),
     "efficientnet_cls": MethodSpec("EfficientNet classifier для чисто/грязно", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
@@ -200,6 +201,38 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
             from method_scripts.changeformer import ChangeformerRunner
 
         return ChangeformerRunner(method_id, **kwargs)
+    if method_id == "dinov2_cd":
+        try:
+            from .method_scripts.dinov2_cd import DinoV2CdRunner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "dinov2_cd",
+                "launcher.dinov2_cd",
+                "method_scripts.dinov2_cd",
+                "launcher.method_scripts.dinov2_cd",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.dinov2_cd import DinoV2CdRunner
+
+        return DinoV2CdRunner(method_id, **kwargs)
+    if method_id == "siamese_unet_cd":
+        try:
+            from .method_scripts.siamese_unet_cd import SiameseUnetCdRunner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "siamese_unet_cd",
+                "launcher.siamese_unet_cd",
+                "method_scripts.siamese_unet_cd",
+                "launcher.method_scripts.siamese_unet_cd",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.siamese_unet_cd import SiameseUnetCdRunner
+
+        return SiameseUnetCdRunner(method_id, **kwargs)
     if method_id == "orb_ransac":
         return DifferenceMapRunner(method_id)
     if method_id not in METHODS:

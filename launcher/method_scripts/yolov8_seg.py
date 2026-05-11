@@ -26,7 +26,10 @@ except ImportError:
 
 YOLOV8_SEG_CONFIG = {
 	# Default pretrained checkpoint for inference and training starts.
-	"model_name": "yolov8m-seg.pt",
+	"model_name": "yolov8m_trash_finetuned.pt",
+	# Default fine-tuned checkpoint for trash segmentation.
+	"weights_path": Path(__file__).resolve().parent.parent.parent / "runs" / "segment" / "datasets" / "TACO" / "yolo_seg" / "runs" / "taco_mseg_restart_70ep_best" / "weights" / "best.pt",
+	
 	# Root folder with the TACO dataset and its exported YOLO data.
 	"dataset_root": Path(__file__).resolve().parent.parent.parent / "datasets" / "TACO",
 	# Subfolder inside the dataset root where YOLO artifacts are written.
@@ -42,7 +45,7 @@ YOLOV8_SEG_CONFIG = {
 	# Fraction of images assigned to the validation split.
 	"split_val_ratio": 0.1,
 	# Minimum confidence score for detections to keep.
-	"confidence_threshold": 0.10,
+	"confidence_threshold": 0.20,
 	# IoU threshold used by prediction-side suppression and merge logic.
 	"iou_threshold": 0.40,
 	# Input image size used for regular full-frame inference.
@@ -62,15 +65,15 @@ YOLOV8_SEG_CONFIG = {
 	# Tile edge length used for sliding-window inference.
 	"tile_size": 640,
 	# Fractional overlap between neighboring tiles.
-	"tile_overlap_ratio": 0.3,
+	"tile_overlap_ratio": 0.5,
 	# Prediction resolution used for each tile crop.
 	"tile_predict_image_size": 960,
 	# Maximum number of tiles allowed per image to avoid runaway inference.
 	"tile_max_tiles": 196,
 	# IoU threshold used when merging tile detections.
-	"tile_nms_iou": 0.5,
+	"tile_nms_iou": 0.6,
 	# Minimum mask area in pixels for tile detections to survive filtering.
-	"tile_min_mask_area_px": 12,
+	"tile_min_mask_area_px": 100,
 	# Default number of training epochs for the fine-tuning run.
 	"train_epochs": 90,
 	# Default training batch size.
@@ -102,7 +105,7 @@ YOLOV8_SEG_CONFIG = {
 	# Height of the title bar drawn on each preview panel.
 	"panel_title_height": 44,
 	# Minimum mask area in pixels when summarizing detections.
-	"min_mask_area_px": 20,
+	"min_mask_area_px": 200,
 	# Heatmap palette used for difference previews.
 	"colormap": cv2.COLORMAP_TURBO,
 }
@@ -150,7 +153,7 @@ class YoloV8SegRunner:
 		self.device = device
 		self.force_cpu = force_cpu
 		self.model_name = model_name or str(YOLOV8_SEG_CONFIG["model_name"])
-		self.weights_path = Path(weights_path) if weights_path is not None else None
+		self.weights_path = Path(weights_path) if weights_path is not None else Path(YOLOV8_SEG_CONFIG["weights_path"])
 		self.class_filter = class_filter if class_filter is not None else YOLOV8_SEG_CONFIG["class_filter"]
 		self.dataset_root = Path(dataset_root) if dataset_root is not None else Path(YOLOV8_SEG_CONFIG["dataset_root"])
 		self.dataset_export_root = self.dataset_root / str(YOLOV8_SEG_CONFIG["dataset_export_subdir"])
