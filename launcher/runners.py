@@ -23,12 +23,14 @@ class MethodSpec:
 
 
 METHOD_SPECS = {
-    "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "changeformer.yml"),
-    "dinov2": MethodSpec("DINOv2", "projekt-dinov2-cd", CONDA_ENV_DIR / "dinov2_cd.yml"),
-    "efficientnet": MethodSpec("EfficientNet", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
-    "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "01_sift", CONDA_ENV_DIR / "sift_ransac.yml"),
-    "siamese_unet": MethodSpec("Siamese U-Net", "projekt-siamese-unet-cd", CONDA_ENV_DIR / "siamese_unet_cd.yml"),
-    "yolov8_seg": MethodSpec("YOLOv8-seg", "projekt-yolov8-seg", CONDA_ENV_DIR / "yolov8_seg.yml"),
+    "changeformer": MethodSpec("ChangeFormer", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "changeformer_dinov2": MethodSpec("ChangeFormer + DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "dinov2": MethodSpec("DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "efficientnet": MethodSpec("EfficientNet", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "siamese_unet": MethodSpec("Siamese U-Net", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "siamese_dinov2": MethodSpec("Siamese U-Net + DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "yolov8_seg": MethodSpec("YOLOv8-seg", "projekt-base", CONDA_ENV_DIR / "base.yml"),
     # "orb_ransac": MethodSpec("ORB + RANSAC + difference map", "projekt-orb-ransac", CONDA_ENV_DIR / "orb_ransac.yml"),
     # "yolov8_det": MethodSpec("YOLOv8-detection", "projekt-yolov8-det", CONDA_ENV_DIR / "yolov8_det.yml"),
     # "faster_rcnn": MethodSpec("Faster R-CNN", "projekt-faster-rcnn", CONDA_ENV_DIR / "faster_rcnn.yml"),
@@ -52,6 +54,8 @@ METHOD_ALIASES = {
     "efficientnet_cls": "efficientnet",
     "dinov2_cd": "dinov2",
     "siamese_unet_cd": "siamese_unet",
+    "siamese_unet_dinov2_cd": "siamese_dinov2",
+    "changeformer_dinov2_cd": "changeformer_dinov2",
 }
 
 
@@ -215,6 +219,23 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
 
         return ChangeformerRunner(method_id, **kwargs)
 
+    if method_id == "changeformer_dinov2":
+        try:
+            from .method_scripts.changeformer_dinov2_cd import ChangeformerDinoV2Runner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "changeformer_dinov2_cd",
+                "launcher.changeformer_dinov2_cd",
+                "method_scripts.changeformer_dinov2_cd",
+                "launcher.method_scripts.changeformer_dinov2_cd",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.changeformer_dinov2_cd import ChangeformerDinoV2Runner
+
+        return ChangeformerDinoV2Runner(method_id, **kwargs)
+
     if method_id == "dinov2":
         try:
             from .method_scripts.dinov2_cd import DinoV2CdRunner
@@ -249,6 +270,23 @@ def create_runner(method_id: str, **kwargs: Any) -> AlgorithmRunner:
 
         return SiameseUnetCdRunner(method_id, **kwargs)
 
+    if method_id == "siamese_dinov2":
+        try:
+            from .method_scripts.siamese_dinov2_cd import SiameseDinoV2Runner
+        except ImportError as exc:
+            is_relative_import_context_error = "attempted relative import" in str(exc)
+            missing_target_module = getattr(exc, "name", None) in {
+                "siamese_dinov2_cd",
+                "launcher.siamese_dinov2_cd",
+                "method_scripts.siamese_dinov2_cd",
+                "launcher.method_scripts.siamese_dinov2_cd",
+            }
+            if not (is_relative_import_context_error or missing_target_module):
+                raise
+            from method_scripts.siamese_dinov2_cd import SiameseDinoV2Runner
+
+        return SiameseDinoV2Runner(method_id, **kwargs)
+
     if method_id == "orb_ransac":
         return DifferenceMapRunner(method_id)
 
@@ -266,7 +304,7 @@ def _resolve_latest_efficientnet_checkpoint() -> Path | None:
     if preferred_checkpoint.exists():
         return preferred_checkpoint
 
-    canonical_checkpoint = BASE_DIR / "results" / "models" / "efficientnet" / "best.pt"
+    canonical_checkpoint = BASE_DIR / "weights" / "efficientnet_best.pt"
     if canonical_checkpoint.exists():
         return canonical_checkpoint
 

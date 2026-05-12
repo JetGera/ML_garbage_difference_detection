@@ -1,16 +1,33 @@
-/__init__.py
-/__pycache__
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+/.idea
+
+# Generated/temporary artifacts
 /results
-/datasets
 /runs
-/.github
-launcher/method_scripts/__pycache__
-/launcher/__pycache__
-yolov8m-seg.pt
-yolov8n-seg.pt
-yolo26n.pt
+/metrics
+/datasets
+/Garbage Pairs Dataset
+
+# Model weights (training outputs)
+results/models/
+results/training/
+*.pt
 .github/copilot-instructions.md
 README.md
-/.idea
-/Garbage Pairs Dataset
-launcher/utils/__pycache__/
+__init__.py

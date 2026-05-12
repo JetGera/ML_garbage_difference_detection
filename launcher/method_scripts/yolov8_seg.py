@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import shutil
 from collections import defaultdict
 from datetime import datetime
@@ -13,6 +15,8 @@ from uuid import uuid4
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
 	from ..utils.io_utils import sanitize_folder_component, write_image
@@ -33,9 +37,10 @@ except ImportError:
 
 YOLOV8_SEG_CONFIG = {
 	# Default pretrained checkpoint for inference and training starts.
-	"model_name": "yolov8m_trash_finetuned.pt",
+	"model_name": Path(__file__).resolve().parent.parent.parent / "weights" / "yolov8m_trash_finetuned.pt",
+
 	# Default fine-tuned checkpoint for trash segmentation.
-	"weights_path": Path(__file__).resolve().parent.parent.parent / "runs" / "segment" / "datasets" / "TACO" / "yolo_seg" / "runs" / "taco_mseg_restart_70ep_best" / "weights" / "best.pt",
+	"weights_path": Path(__file__).resolve().parent.parent.parent / "weights" / "yolov8_seg_best.pt",
 	
 	# Root folder with the TACO dataset and its exported YOLO data.
 	"dataset_root": Path(__file__).resolve().parent.parent.parent / "datasets" / "TACO",
@@ -52,7 +57,7 @@ YOLOV8_SEG_CONFIG = {
 	# Fraction of images assigned to the validation split.
 	"split_val_ratio": 0.1,
 	# Minimum confidence score for detections to keep.
-	"confidence_threshold": 0.20,
+	"confidence_threshold": 0.35,
 	# IoU threshold used by prediction-side suppression and merge logic.
 	"iou_threshold": 0.40,
 	# Input image size used for regular full-frame inference.
@@ -112,7 +117,7 @@ YOLOV8_SEG_CONFIG = {
 	# Height of the title bar drawn on each preview panel.
 	"panel_title_height": 44,
 	# Minimum mask area in pixels when summarizing detections.
-	"min_mask_area_px": 200,
+	"min_mask_area_px": 144,
 	# Heatmap palette used for difference previews.
 	"colormap": cv2.COLORMAP_TURBO,
 }
@@ -271,7 +276,10 @@ class YoloV8SegRunner:
 		}
 
 		summary = "YOLOv8 segmentation inference on a before/after pair with device fallback and mask aggregation."
+		model_source_str = metrics.get("model_source", "unknown")
+		model_source_name = Path(model_source_str).name if model_source_str else "unknown"
 		preview_text = (
+			f"Model weights: {model_source_name} ({model_source_str})\n"
 			f"Device: {device_used} (requested: {self.device})\n"
 			f"TACO export: {self.dataset_yaml_path if self.dataset_yaml_path.exists() else 'not prepared'}\n"
 			f"Tile inference mode: {metrics['tile_inference_mode']} (before tiles: {before_tile_count}, after tiles: {after_tile_count})\n"
@@ -302,12 +310,14 @@ class YoloV8SegRunner:
 	def _load_model(self):
 		model_source = self._resolve_model_source()
 		if self._model is None or self._model_source != model_source:
+			logger.info(f"YoloV8SegRunner: Loading model weights: {model_source}")
 			self._model = YOLO(str(model_source))
 			self._model_source = model_source
 		return self._model
 
 	def _resolve_model_source(self) -> Path | str:
 		if self.weights_path is not None and self.weights_path.exists():
+			logger.info(f"YoloV8SegRunner: Using weights_path: {self.weights_path}")
 			return self.weights_path
 
 		candidate_weights = [
@@ -327,8 +337,10 @@ class YoloV8SegRunner:
 					candidate_weights.append(run_dir / "weights" / "last.pt")
 		for candidate in candidate_weights:
 			if candidate.exists():
+				logger.info(f"YoloV8SegRunner: Found candidate weights: {candidate}")
 				return candidate
 
+		logger.info(f"YoloV8SegRunner: No candidate weights found, using fallback model_name: {self.model_name}")
 		return self.model_name
 
 	def train_on_taco(

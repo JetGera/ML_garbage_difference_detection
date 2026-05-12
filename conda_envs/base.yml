@@ -1,0 +1,27 @@
+name: projekt-base
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pip
+
+  - pip:
+      - numpy
+      - scipy
+      - matplotlib
+      - tqdm
+      - scikit-image
+      - pillow
+      - seaborn
+      - pycocotools
+      - scikit-learn
+      - albumentations
+      - opencv-contrib-python
+      - opencv-python
+      - torch
+      - torchvision
+      - ultralytics
+      - timm
+      

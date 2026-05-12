@@ -6,10 +6,13 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-    from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 from uuid import uuid4
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+try:
+    from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
+except ImportError:
     from utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
 
 import cv2
@@ -88,6 +91,38 @@ class DinoV2CdRunner:
     @property
     def label(self) -> str:
         return self.spec.label
+
+    def predict_probability_map(
+        self,
+        before_path: str | Path,
+        after_path: str | Path,
+    ) -> tuple[np.ndarray, dict[str, str | float | bool | None]]:
+        before = Path(before_path)
+        after = Path(after_path)
+        before_img = self._read_color_image(before)
+        after_img = self._read_color_image(after)
+        return self.predict_probability_map_from_images(before_img, after_img)
+
+    def predict_probability_map_from_images(
+        self,
+        before_img: np.ndarray,
+        after_img: np.ndarray,
+    ) -> tuple[np.ndarray, dict[str, str | float | bool | None]]:
+        aligned_before, aligned_after, overlap_mask, alignment_mode = self._align_after_to_before(before_img, after_img)
+        probability_map, inference_ms, model_source, device_used, fallback_reason = self._predict_semantic_change_map(
+            aligned_before,
+            aligned_after,
+        )
+        metadata = {
+            "model_source": str(model_source),
+            "device_used": str(device_used),
+            "alignment_mode": str(alignment_mode),
+            "inference_ms": float(inference_ms),
+            "fallback_reason": fallback_reason,
+            "torch_import_ok": TORCH_IMPORT_ERROR is None,
+            "timm_import_ok": TIMM_IMPORT_ERROR is None,
+        }
+        return probability_map.astype(np.float32), metadata
 
     def analyze(self, before_path: str | Path, after_path: str | Path) -> AnalysisResult:
         before = Path(before_path)
@@ -305,9 +340,10 @@ class DinoV2CdRunner:
 
     def _predict_semantic_change_map(self, before_img: np.ndarray, after_img: np.ndarray) -> tuple[np.ndarray, float, str, str, str | None]:
         if torch is None or timm is None:
-            diff_map, inference_ms = self._predict_cv_fallback(before_img, after_img)
-            reason = f"torch_or_timm_unavailable; torch_error={TORCH_IMPORT_ERROR}; timm_error={TIMM_IMPORT_ERROR}"
-            return diff_map, inference_ms, "cv_fallback", "cpu", reason
+            raise RuntimeError(
+                "DINOv2 inference requires torch and timm. "
+                f"torch_error={TORCH_IMPORT_ERROR}; timm_error={TIMM_IMPORT_ERROR}"
+            )
 
         try:
             model = self._load_feature_model()
@@ -323,9 +359,7 @@ class DinoV2CdRunner:
             inference_ms = (perf_counter() - start) * 1000.0
             return probability_map, inference_ms, str(self._feature_model_source), device_used, None
         except Exception as exc:
-            diff_map, inference_ms = self._predict_cv_fallback(before_img, after_img)
-            reason = f"dinov2_runtime_fallback: {type(exc).__name__}: {exc}"
-            return diff_map, inference_ms, "cv_fallback", "cpu", reason
+            raise RuntimeError(f"DINOv2 inference failed: {type(exc).__name__}: {exc}") from exc
 
     def _predict_cv_fallback(self, before_img: np.ndarray, after_img: np.ndarray) -> tuple[np.ndarray, float]:
         start = perf_counter()
@@ -379,13 +413,15 @@ class DinoV2CdRunner:
         return self._feature_model
 
     def _resolve_device(self):
+        if torch is None:
+            raise RuntimeError(f"Torch is unavailable: {TORCH_IMPORT_ERROR}")
         if self.force_cpu:
             return torch.device("cpu"), "cpu"
         if self.device == "cpu":
             return torch.device("cpu"), "cpu"
-        if self.device == "cuda" and torch.cuda.is_available():
+        if self.device == "cuda" and torch is not None and torch.cuda.is_available():
             return torch.device("cuda"), "cuda"
-        if self.device == "auto" and torch.cuda.is_available():
+        if self.device == "auto" and torch is not None and torch.cuda.is_available():
             return torch.device("cuda"), "cuda"
         return torch.device("cpu"), "cpu"
 

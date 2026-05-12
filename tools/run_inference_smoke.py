@@ -9,16 +9,22 @@ sys.path.insert(0, str(ROOT))
 
 from launcher.method_scripts.siamese_unet_cd import SiameseUnetCdRunner
 
+DATASET_ROOT = Path(r"C:\Coding\AI\Dataset\!tests\AI_TEST")
+
 runner = SiameseUnetCdRunner("siamese_unet_cd")
 outdir = Path("results/training/siamese_unet_cd_smoke2/inference_examples")
 outdir.mkdir(parents=True, exist_ok=True)
 
-with open("datasets/TACO/cd_pairs/index_smoke2.csv", newline='', encoding='utf-8') as f:
-    rows = list(csv.DictReader(f))
+rows = []
+for pair_dir in sorted([path for path in DATASET_ROOT.iterdir() if path.is_dir()]):
+    before = pair_dir / "before.png"
+    after = pair_dir / "AI_after.png"
+    if before.exists() and after.exists():
+        rows.append({"split": "val", "before_path": str(before), "after_path": str(after)})
 
 val_rows = [r for r in rows if r['split'] == 'val'][:3]
 if not val_rows:
-    print('No val rows found in index_smoke2.csv')
+    print('No val rows found in C:\\Coding\\AI\\Dataset\\!tests\\AI_TEST')
 
 for i, r in enumerate(val_rows):
     before = r['before_path']

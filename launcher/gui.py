@@ -14,13 +14,18 @@ from tkinter import filedialog, messagebox, ttk
 
 try:
     from .core import list_image_files, select_before_after
-    from .methods import METHODS, get_method_spec, normalize_method_id
+    from .methods import METHODS, METHOD_LABELS, get_method_spec, normalize_method_id
 except ImportError:
     from core import list_image_files, select_before_after
-    from methods import METHODS, get_method_spec, normalize_method_id
+    from methods import METHODS, METHOD_LABELS, get_method_spec, normalize_method_id
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+METHOD_DISPLAY_VALUES = [f"{METHOD_LABELS[method_id]} [{method_id}]" for method_id in METHODS]
+METHOD_DISPLAY_TO_ID = {display_value: method_id for display_value, method_id in zip(METHOD_DISPLAY_VALUES, METHODS)}
+METHOD_ID_TO_DISPLAY = {method_id: display_value for display_value, method_id in zip(METHOD_DISPLAY_VALUES, METHODS)}
 
 
 def _find_conda_exe() -> Path | None:
@@ -89,7 +94,7 @@ class LauncherApp(tk.Tk):
         self.minsize(1200, 800)
 
         self.folder_var = tk.StringVar(value="")
-        self.method_var = tk.StringVar(value=METHODS[0])
+        self.method_var = tk.StringVar(value=METHOD_ID_TO_DISPLAY[METHODS[0]])
         self.status_var = tk.StringVar(value="Choose a folder with an image pair and start the analysis.")
 
         self.before_text_label: tk.Text | None = None
@@ -129,7 +134,7 @@ class LauncherApp(tk.Tk):
         method_row = ttk.Frame(top)
         method_row.pack(fill="x", pady=(0, 8))
         ttk.Label(method_row, text="Method:", width=20).pack(side="left")
-        method_combo = ttk.Combobox(method_row, textvariable=self.method_var, values=METHODS, state="readonly")
+        method_combo = ttk.Combobox(method_row, textvariable=self.method_var, values=METHOD_DISPLAY_VALUES, state="readonly")
         method_combo.pack(side="left", fill="x", expand=True)
         method_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_method_hint())
 
@@ -195,9 +200,19 @@ class LauncherApp(tk.Tk):
         self.preview_caption_label.pack(fill="x", pady=(6, 0))
 
     def _update_method_hint(self) -> None:
-        method_id = self.method_var.get()
+        method_id = self._resolve_selected_method_id()
         spec = get_method_spec(method_id)
         self.method_hint.configure(text=f"Current method: {spec.label} | conda env: {spec.env_name}")
+
+    def _resolve_selected_method_id(self) -> str:
+        value = normalize_method_id(self.method_var.get().strip())
+        if value in METHODS:
+            return value
+        if value in METHOD_DISPLAY_TO_ID:
+            return METHOD_DISPLAY_TO_ID[value]
+        if value in METHOD_ID_TO_DISPLAY:
+            return value
+        return METHODS[0]
 
     def choose_folder(self) -> None:
         folder = filedialog.askdirectory(title="Choose an image pair folder")
@@ -243,7 +258,7 @@ class LauncherApp(tk.Tk):
 
     def _run_worker(self, before_path: Path, after_path: Path) -> None:
         try:
-            result = self._run_analysis_in_conda(self.method_var.get(), before_path, after_path)
+            result = self._run_analysis_in_conda(self._resolve_selected_method_id(), before_path, after_path)
             self.after(0, lambda: self._show_result(result))
         except Exception as exc:
             error_text = traceback.format_exc()
@@ -257,6 +272,9 @@ class LauncherApp(tk.Tk):
         conda_exe = _find_conda_exe()
         if conda_exe is None:
             raise RuntimeError("conda.exe was not found for launching the method in its own environment.")
+
+        env = os.environ.copy()
+        env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
         command = [
             str(conda_exe),
@@ -275,7 +293,15 @@ class LauncherApp(tk.Tk):
             "--output",
             str(result_file),
         ]
-        completed = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8")
+
+        completed = subprocess.run(
+            command, 
+            cwd=PROJECT_ROOT, 
+            capture_output=True, 
+            text=True, 
+            encoding="utf-8",
+            env=env 
+        )
 
         if not result_file.exists():
             raise RuntimeError(
@@ -448,11 +474,11 @@ class LauncherApp(tk.Tk):
         if method:
             normalized_method = normalize_method_id(method)
             if normalized_method in METHODS:
-                self.method_var.set(normalized_method)
+                self.method_var.set(METHOD_ID_TO_DISPLAY[normalized_method])
 
     def _save_prefs(self) -> None:
         path = self._prefs_path()
-        data = {"folder": self.folder_var.get() or "", "method": normalize_method_id(self.method_var.get() or "")}
+        data = {"folder": self.folder_var.get() or "", "method": self._resolve_selected_method_id()}
         try:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:

@@ -35,7 +35,7 @@ except ImportError:
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
-DEFAULT_CANONICAL_WEIGHTS = Path("results") / "models" / "efficientnet" / "best.pt"
+DEFAULT_CANONICAL_WEIGHTS = Path("weights") / "efficientnet_best.pt"
 
 
 @dataclass(frozen=True)
@@ -903,8 +903,8 @@ def resolve_device(args: argparse.Namespace) -> torch.device:
     if args.device == "cpu":
         return torch.device("cpu")
     if args.device == "cuda":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return torch.device("cuda" if (torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()) else "cpu")
+    return torch.device("cuda" if (torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()) else "cpu")
 
 
 def main() -> None:

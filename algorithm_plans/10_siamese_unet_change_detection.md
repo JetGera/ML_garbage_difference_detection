@@ -24,7 +24,7 @@
 3. При необходимости обрезать область пересечения кадров.
 4. Сформировать train/val/test split по парам, а не по одиночным изображениям.
 5. Для TACO пары синтезируются из `datasets/TACO/data/annotations.json`: `before` = исходное изображение, `after` = синтетически очищенный кадр, `mask` = union-маска trash-полигонов.
-6. Экспорт пар и индекса хранить в `datasets/TACO/cd_pairs/` с CSV-индексом, который уже понимает `launcher/train_siamese_unet_cd.py`.
+6. Для локальных smoke/validation запусков использовать `C:\Coding\AI\Dataset` как рабочий набор пар изображений.
 
 ## 6. Pipeline обучения
 1. Построить два одинаковых энкодера с общими весами.
@@ -100,10 +100,10 @@
 
 ```bash
 # Полная генерация
-python datasets/TACO/build_cd_pairs.py --output-root datasets/TACO/cd_pairs
+python datasets/TACO/build_cd_pairs.py --output-root C:\Coding\AI\Dataset
 
 # Smoke test (25 images)
-python datasets/TACO/build_cd_pairs.py --max-images 25 --output-root datasets/TACO/cd_pairs_smoke
+python datasets/TACO/build_cd_pairs.py --max-images 25 --output-root C:\Coding\AI\Dataset\!tests\AI_TEST
 ```
 
 ### Как запустить обучение
@@ -112,7 +112,7 @@ python datasets/TACO/build_cd_pairs.py --max-images 25 --output-root datasets/TA
 .\install-conda-envs.ps1 -Methods siamese_unet_cd
 
 conda run -n projekt-siamese-unet-cd python -m launcher.train_siamese_unet_cd \
-	--index-csv datasets/TACO/cd_pairs/index.csv \
+	--index-csv C:\Coding\AI\Dataset\!tests\AI_TEST\index.csv \
 	--output-root results/training/siamese_unet_cd \
 	--epochs 70 --batch-size 2 --learning-rate 3e-4
 ```

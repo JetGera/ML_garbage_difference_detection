@@ -170,7 +170,7 @@ class EfficientNetClsRunner:
             "device_requested": self.device,
             "device_used": device_used,
             "force_cpu": bool(self.force_cpu),
-            "cuda_available": bool(torch.cuda.is_available()),
+            "cuda_available": bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()),
             "input_size": int(EFFICIENTNET_CLS_CONFIG["input_size"]),
             "dirty_threshold": float(self.dirty_threshold),
             "dirty_keyword_classes": int(len(self._dirty_class_indices)),
@@ -290,6 +290,11 @@ class EfficientNetClsRunner:
         return f"checkpoint:{checkpoint_path.resolve()}:{mtime_ns}"
 
     def _discover_latest_training_checkpoint(self) -> Path | None:
+        # First try central weights location
+        central_weights = Path(__file__).resolve().parent.parent.parent / "weights" / "efficientnet_best.pt"
+        if central_weights.exists():
+            return central_weights
+        
         training_root = Path(__file__).resolve().parent.parent.parent / "results" / "training"
         if not training_root.exists():
             return None

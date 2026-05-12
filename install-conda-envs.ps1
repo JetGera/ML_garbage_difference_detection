@@ -1,63 +1,39 @@
 <#
 .SYNOPSIS
-Installs or updates conda environments from the conda_envs folder.
+Installs or updates the projekt-base conda environment.
 
 .DESCRIPTION
-By default, the script processes every *.yml file in conda_envs.
-You can also target one or more methods by name, using the same base name as the YAML file.
-
-.PARAMETER Methods
-One or more method names, for example yolov8_seg or resnet_cls.
-
-.PARAMETER All
-Process every environment file in conda_envs.
+This script creates or updates the projekt-base environment which contains all dependencies
+for running all methods in the project. All methods are executed through this single environment.
 
 .PARAMETER Recreate
 Remove an existing environment first, then create it again from the YAML file.
 
 .PARAMETER ListOnly
-Print the resolved environment names and files without creating or updating anything.
+Print the environment name and details without creating or updating anything.
 
 .EXAMPLE
 .\install-conda-envs.ps1
 
-Updates or creates every environment defined in conda_envs.
+Creates or updates the projekt-base environment.
 
 .EXAMPLE
-.\install-conda-envs.ps1 -Methods yolov8_seg
+.\install-conda-envs.ps1 -Recreate
 
-Installs or updates only the YOLOv8 segmentation environment.
-
-.EXAMPLE
-.\install-conda-envs.ps1 -Methods yolov8_seg -Recreate
-
-Deletes the existing yolov8_seg environment and creates it again.
+Deletes the existing projekt-base environment and creates it again from scratch.
 
 .EXAMPLE
 .\install-conda-envs.ps1 -ListOnly
 
-Shows which environment names will be used.
-
-.EXAMPLE
-.\install-conda-envs.ps1 -Methods siamese_unet_cd
-
-Installs or updates only the Siamese U-Net change detection environment (with cv2 support for improved inpainting).
-
-.EXAMPLE
-.\install-conda-envs.ps1 -Methods dinov2_cd
-
-Installs or updates only the DINOv2 change detection environment.
+Shows environment details without making any changes.
 
 .NOTES
-For Siamese U-Net workflow:
-  1. Generate training pairs: python datasets/TACO/build_cd_pairs.py
-  2. Create environment: .\install-conda-envs.ps1 -Methods siamese_unet_cd
-    3. Run inference: python -m launcher.gui (select Siamese U-Net method)
+- The projekt-base environment contains all dependencies for all methods.
+- All methods are executed through: conda run -n projekt-base python -m launcher.gui
+- Conda output (solver/install) is displayed in real-time.
 #>
 [CmdletBinding()]
 param(
-    [string[]]$Methods,
-    [switch]$All,
     [switch]$Recreate,
     [switch]$ListOnly
 )
@@ -66,6 +42,11 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
 $envDir = Join-Path $repoRoot 'conda_envs'
+$baseEnvFile = Join-Path $envDir 'base.yml'
+
+if (-not (Test-Path $baseEnvFile)) {
+    throw "base.yml not found at $baseEnvFile"
+}
 
 function Get-CondaCommand {
     if ($env:CONDA_EXE -and (Test-Path $env:CONDA_EXE)) {
@@ -107,23 +88,6 @@ function Get-EnvNameFromFile {
     throw "Could not read env name from $Path"
 }
 
-function Get-TargetEnvFiles {
-    if ($All -or -not $Methods) {
-        return Get-ChildItem -Path $envDir -Filter '*.yml' | Sort-Object Name
-    }
-
-    $files = foreach ($method in $Methods) {
-        $candidate = Join-Path $envDir "$method.yml"
-        if (-not (Test-Path $candidate)) {
-            throw "Unknown method '$method'. Expected a file at $candidate"
-        }
-
-        Get-Item $candidate
-    }
-
-    return $files
-}
-
 function Test-EnvExists {
     param(
         [Parameter(Mandatory = $true)][string]$CondaCommand,
@@ -142,39 +106,56 @@ function Test-EnvExists {
     return $false
 }
 
-$condaCommand = Get-CondaCommand
-$envFiles = Get-TargetEnvFiles
+function Invoke-CondaStreaming {
+    param(
+        [Parameter(Mandatory = $true)][string]$CondaCommand,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$OperationLabel
+    )
 
-foreach ($envFile in $envFiles) {
-    $envName = Get-EnvNameFromFile -Path $envFile.FullName
-    $envExists = Test-EnvExists -CondaCommand $condaCommand -EnvName $envName
-
-    if ($ListOnly) {
-        Write-Host "[$($envFile.BaseName)] $envName -> $($envFile.FullName)"
-        continue
-    }
-
-    if ($Recreate -and $envExists) {
-        Write-Host "Removing existing env: $envName"
-        & $condaCommand env remove -n $envName -y
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to remove $envName"
-        }
-        $envExists = $false
-    }
-
-    if ($envExists) {
-        Write-Host "Updating env: $envName"
-        & $condaCommand env update -f $envFile.FullName --prune
-    }
-    else {
-        Write-Host "Creating env: $envName"
-        & $condaCommand env create -f $envFile.FullName
-    }
+    Write-Host "  Conda output (live):" -ForegroundColor DarkGray
+    Write-Host "  > conda $($Arguments -join ' ')" -ForegroundColor DarkGray
+    & $CondaCommand @Arguments
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to process $envName"
+        throw "Failed to $OperationLabel"
     }
 }
 
+$condaCommand = Get-CondaCommand
+$envName = Get-EnvNameFromFile -Path $baseEnvFile
+
+if ($ListOnly) {
+    Write-Host ''
+    Write-Host "Environment to be processed:" -ForegroundColor Cyan
+    Write-Host "  Name: $envName" -ForegroundColor DarkGray
+    Write-Host "  File: $baseEnvFile" -ForegroundColor DarkGray
+    Write-Host ''
+    exit 0
+}
+
+Write-Host ''
+Write-Host "Processing: base" -ForegroundColor Cyan
+
+$envExists = Test-EnvExists -CondaCommand $condaCommand -EnvName $envName
+
+if ($Recreate -and $envExists) {
+    Write-Host "  Step: remove existing env $envName" -ForegroundColor Yellow
+    Invoke-CondaStreaming -CondaCommand $condaCommand -Arguments @('env', 'remove', '-n', $envName, '-y') -OperationLabel "remove environment $envName"
+    $envExists = $false
+}
+
+if ($envExists) {
+    Write-Host "  Step: update env $envName" -ForegroundColor Green
+    Invoke-CondaStreaming -CondaCommand $condaCommand -Arguments @('env', 'update', '-f', $baseEnvFile, '--prune') -OperationLabel "update environment $envName"
+}
+else {
+    Write-Host "  Step: create env $envName" -ForegroundColor Green
+    Invoke-CondaStreaming -CondaCommand $condaCommand -Arguments @('env', 'create', '-f', $baseEnvFile) -OperationLabel "create environment $envName"
+}
+
+Write-Host "  Done: $envName" -ForegroundColor Green
+
+Write-Host ''
+Write-Host "Installation completed" -ForegroundColor Cyan
 Write-Host 'Done.'

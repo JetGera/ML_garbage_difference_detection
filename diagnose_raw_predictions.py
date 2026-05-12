@@ -9,10 +9,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from launcher.method_scripts.siamese_unet_cd import SiameseUnetCdRunner
 
+
+TEST_PAIR_DIR = Path(r"C:\Coding\AI\Dataset\1")
+
+
+def _resolve_pair() -> tuple[Path, Path]:
+    before = TEST_PAIR_DIR / "before.png"
+    for after_name in ("after.png", "AI_after.png"):
+        after = TEST_PAIR_DIR / after_name
+        if before.exists() and after.exists():
+            return before, after
+    return before, TEST_PAIR_DIR / "after.png"
+
 def main():
-    test_dir = Path("datasets/TACO/cd_pairs/test")
-    before_path = test_dir / "before" / "test__img000013__pos__before.jpg"
-    after_path = test_dir / "after" / "test__img000013__pos__after.jpg"
+    before_path, after_path = _resolve_pair()
     
     runner = SiameseUnetCdRunner("siamese_unet_cd", device="auto")
     

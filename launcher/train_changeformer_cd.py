@@ -35,7 +35,7 @@ except ImportError:
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET_ROOT = BASE_DIR / "Garbage Pairs Dataset" / "!masks_for_training"
 DEFAULT_OUTPUT_ROOT = BASE_DIR / "results" / "training"
-DEFAULT_CANONICAL_WEIGHTS = BASE_DIR / "results" / "models" / "changeformer" / "best.pt"
+DEFAULT_CANONICAL_WEIGHTS = BASE_DIR / "weights" / "changeformer_best.pt"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 MASK_HINTS = ("mask", "masks", "mask_to_edit")
 
@@ -526,8 +526,8 @@ def resolve_device(args: argparse.Namespace) -> torch.device:
     if args.device == "cpu":
         return torch.device("cpu")
     if args.device == "cuda":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return torch.device("cuda" if (torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()) else "cpu")
+    return torch.device("cuda" if (torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()) else "cpu")
 
 
 def maybe_limit(samples: list[ChangeSample], limit: int | None) -> list[ChangeSample]:

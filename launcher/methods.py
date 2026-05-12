@@ -16,12 +16,14 @@ class MethodSpec:
 
 
 METHOD_SPECS = {
-    "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "changeformer.yml"),
-    "dinov2": MethodSpec("DINOv2", "projekt-dinov2-cd", CONDA_ENV_DIR / "dinov2_cd.yml"),
-    "efficientnet": MethodSpec("EfficientNet", "projekt-efficientnet-cls", CONDA_ENV_DIR / "efficientnet_cls.yml"),
-    "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "01_sift", CONDA_ENV_DIR / "sift_ransac.yml"),
-    "siamese_unet": MethodSpec("Siamese U-Net", "projekt-siamese-unet-cd", CONDA_ENV_DIR / "siamese_unet_cd.yml"),
-    "yolov8_seg": MethodSpec("YOLOv8-seg", "projekt-yolov8-seg", CONDA_ENV_DIR / "yolov8_seg.yml"),
+    "changeformer": MethodSpec("ChangeFormer", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "changeformer_dinov2": MethodSpec("ChangeFormer + DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "dinov2": MethodSpec("DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "efficientnet": MethodSpec("EfficientNet", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "siamese_unet": MethodSpec("Siamese U-Net", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "siamese_dinov2": MethodSpec("Siamese U-Net + DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "yolov8_seg": MethodSpec("YOLOv8-seg", "projekt-base", CONDA_ENV_DIR / "base.yml"),
     # "orb_ransac": MethodSpec("ORB + RANSAC + difference map", "projekt-orb-ransac", CONDA_ENV_DIR / "orb_ransac.yml"),
     # "yolov8_det": MethodSpec("YOLOv8-detection", "projekt-yolov8-det", CONDA_ENV_DIR / "yolov8_det.yml"),
     # "faster_rcnn": MethodSpec("Faster R-CNN", "projekt-faster-rcnn", CONDA_ENV_DIR / "faster_rcnn.yml"),
@@ -45,6 +47,8 @@ METHOD_ALIASES = {
     "efficientnet_cls": "efficientnet",
     "dinov2_cd": "dinov2",
     "siamese_unet_cd": "siamese_unet",
+    "siamese_unet_dinov2_cd": "siamese_dinov2",
+    "changeformer_dinov2_cd": "changeformer_dinov2",
 }
 
 

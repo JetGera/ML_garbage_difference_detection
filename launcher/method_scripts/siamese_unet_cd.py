@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
+from typing import Any
+from uuid import uuid4
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -29,12 +32,20 @@ try:
     from ..utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
     from ..utils.io_utils import write_image
     from ..utils.viz_utils import annotate_panel, blend_with_alpha, resize_if_too_large
+    try:
+        from ..method_scripts.sift_ransac import SiftRansacRunner
+    except Exception:
+        SiftRansacRunner = None
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
     from utils.alignment_utils import build_validity_mask, compute_overlap_mask, try_ecc_alignment
     from utils.io_utils import write_image
     from utils.viz_utils import annotate_panel, blend_with_alpha, resize_if_too_large
+    try:
+        from method_scripts.sift_ransac import SiftRansacRunner
+    except Exception:
+        SiftRansacRunner = None
 
 
 SIAMESE_UNET_CD_CONFIG = {
@@ -92,8 +103,9 @@ if nn is not None:
     class SiameseUNet(nn.Module):
         def __init__(self, pretrained: bool = True, input_channels: int = 3, base_channels: int = 64):
             super().__init__()
-            if input_channels != 3:
-                raise ValueError("This implementation currently expects RGB inputs per branch")
+            input_channels = int(input_channels)
+            if input_channels <= 0:
+                raise ValueError("input_channels must be positive")
 
             self.encoder = None
             if resnet34 is not None:
@@ -102,7 +114,7 @@ if nn is not None:
                 self.encoder.fc = nn.Identity()
 
             self.enc0 = nn.Sequential(
-                nn.Conv2d(3, base_channels, kernel_size=3, padding=1, bias=False),
+                nn.Conv2d(input_channels, base_channels, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(base_channels),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(base_channels, base_channels, kernel_size=3, padding=1, bias=False),
@@ -182,21 +194,21 @@ class SiameseUnetCdRunner:
         self.input_size = int(input_size or SIAMESE_UNET_CD_CONFIG["input_size"])
         self.threshold = float(threshold or SIAMESE_UNET_CD_CONFIG["threshold"])
         self.weights_path = Path(weights_path) if weights_path is not None else None
-        self._model = None
-        self._model_source = None
+        self._models: dict[int, Any] = {}
+        self._model_sources: dict[int, str] = {}
 
     @property
     def label(self) -> str:
         return self.spec.label
 
-    def analyze(self, before_path: str | Path, after_path: str | Path) -> AnalysisResult:
+    def analyze(self, before_path: str | Path, after_path: str | Path, dinov2_map: np.ndarray | None = None) -> AnalysisResult:
         before = Path(before_path)
         after = Path(after_path)
 
         before_img = self._read_color_image(before)
         after_img = self._read_color_image(after)
         aligned_before, aligned_after, overlap_mask, alignment_mode = self._align_after_to_before(before_img, after_img)
-        prediction = self._predict_change_map(aligned_before, aligned_after)
+        prediction = self._predict_change_map(aligned_before, aligned_after, dinov2_map=dinov2_map)
         probability_map = prediction.probability_map
         threshold_value = prediction.threshold_value
 
@@ -208,6 +220,7 @@ class SiameseUnetCdRunner:
         change_ratio = round(change_pixels / max(overlap_pixels, 1), 6)
 
         probability_u8 = (np.clip(probability_map, 0.0, 1.0) * 255.0).astype(np.uint8)
+        probability_u8 = cv2.bitwise_and(probability_u8, overlap_mask)
         probability_heatmap = cv2.applyColorMap(probability_u8, int(SIAMESE_UNET_CD_CONFIG["colormap"]))
         probability_overlay = blend_with_alpha(
             cv2.cvtColor(aligned_after, cv2.COLOR_BGR2RGB),
@@ -245,6 +258,7 @@ class SiameseUnetCdRunner:
             "change_ratio": change_ratio,
             "inference_ms": round(float(prediction.inference_ms), 3),
             "weights_path": str(self.weights_path) if self.weights_path else None,
+            "dinov2_hint_used": bool(dinov2_map is not None),
         }
 
         summary = "Siamese U-Net change detection on a before/after pair with alignment, postprocessing, and checkpoint-aware inference."
@@ -276,6 +290,8 @@ class SiameseUnetCdRunner:
 
     def _align_after_to_before(self, before_img: np.ndarray, after_img: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
         before_h, before_w = before_img.shape[:2]
+        after_h, after_w = after_img.shape[:2]
+        
         ecc_result = try_ecc_alignment(
             before_img,
             after_img,
@@ -283,23 +299,45 @@ class SiameseUnetCdRunner:
             max_iterations=int(SIAMESE_UNET_CD_CONFIG["ecc_max_iterations"]),
             eps=float(SIAMESE_UNET_CD_CONFIG["ecc_eps"]),
             erode_kernel=(5, 5),
-            allow_crop=True,
+            allow_crop=False,
         )
-        if ecc_result is not None:
-            return before_img, ecc_result["aligned_after"], ecc_result["overlap_mask"], "ecc_affine"
 
+        # If ECC succeeded and residual is low, use it.
+        if ecc_result is not None and float(ecc_result.get("residual", 1.0)) < 0.02:
+            warp_matrix = ecc_result["warp_matrix"]  # 2x3 affine matrix
+            aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas_ecc(
+                before_img, after_img, warp_matrix
+            )
+            return aligned_before, aligned_after, overlap_mask, "ecc_affine"
+
+        # If ECC poor quality or too high residual, try SIFT+RANSAC alignment (if available)
+        if SiftRansacRunner is not None:
+            try:
+                sift_runner = SiftRansacRunner("sift_ransac")
+                res = sift_runner._align_after_to_before(before_img, after_img)
+                if res is not None:
+                    aligned_before, aligned_after, overlap_mask, info, match_vis = res
+                    if info.get("alignment_mode", "").startswith("homography") or info.get("alignment_mode", "").startswith("affine"):
+                        return aligned_before, aligned_after, overlap_mask, info.get("alignment_mode", "sift_ransac")
+            except Exception:
+                pass
+
+        # Fallback: resize after to before dimensions
+        if (before_h, before_w) != (after_h, after_w):
+            after_img = cv2.resize(after_img, (before_w, before_h), interpolation=cv2.INTER_LINEAR)
         overlap_mask = build_validity_mask((before_h, before_w))
-        return before_img, after_img if (before_h, before_w) == after_img.shape[:2] else cv2.resize(after_img, (before_w, before_h), interpolation=cv2.INTER_LINEAR), overlap_mask, "resize_fallback"
+        return before_img, after_img, overlap_mask, "resize_fallback"
 
-    def _predict_change_map(self, before_img: np.ndarray, after_img: np.ndarray) -> _PairPrediction:
+    def _predict_change_map(self, before_img: np.ndarray, after_img: np.ndarray, dinov2_map: np.ndarray | None = None) -> _PairPrediction:
         if torch is None or nn is None:
             return self._heuristic_prediction(before_img, after_img, device_used="cpu", model_source="cv_heuristic")
 
-        model = self._load_model()
+        input_channels = 4 if dinov2_map is not None else 3
+        model = self._load_model(input_channels=input_channels)
         device_used = self._resolve_device()
         model = model.to(device_used)
-        before_tensor = self._image_to_tensor(before_img, device_used)
-        after_tensor = self._image_to_tensor(after_img, device_used)
+        before_tensor = self._image_to_tensor(before_img, device_used, dinov2_map=dinov2_map)
+        after_tensor = self._image_to_tensor(after_img, device_used, dinov2_map=dinov2_map)
 
         start = perf_counter()
         with torch.no_grad():
@@ -307,7 +345,10 @@ class SiameseUnetCdRunner:
             probability = torch.sigmoid(logits)[0, 0].detach().cpu().numpy()
         inference_ms = (perf_counter() - start) * 1000.0
         probability = cv2.resize(probability.astype(np.float32), (before_img.shape[1], before_img.shape[0]), interpolation=cv2.INTER_LINEAR)
-        return _PairPrediction(probability, float(self.threshold), inference_ms, str(self._model_source), device_used)
+        model_source = str(self._model_sources.get(input_channels, "unknown"))
+        if dinov2_map is not None:
+            model_source = f"{model_source}|dinov2_hint"
+        return _PairPrediction(probability, float(self.threshold), inference_ms, model_source, device_used)
 
     def _heuristic_prediction(self, before_img: np.ndarray, after_img: np.ndarray, device_used: str, model_source: str) -> _PairPrediction:
         start = perf_counter()
@@ -318,11 +359,15 @@ class SiameseUnetCdRunner:
         inference_ms = (perf_counter() - start) * 1000.0
         return _PairPrediction(diff_norm, float(self.threshold), inference_ms, model_source, device_used)
 
-    def _load_model(self):
-        if self._model is not None:
-            return self._model
+    def _load_model(self, input_channels: int = 3):
+        input_channels = int(input_channels)
+        if input_channels in self._models:
+            return self._models[input_channels]
 
-        model = SiameseUNet(pretrained=bool(SIAMESE_UNET_CD_CONFIG["encoder_pretrained"]))
+        model = SiameseUNet(
+            pretrained=bool(SIAMESE_UNET_CD_CONFIG["encoder_pretrained"]),
+            input_channels=input_channels,
+        )
         model_source = "random_init"
         checkpoint_path = self.weights_path or self._discover_latest_training_checkpoint()
         if checkpoint_path is not None and checkpoint_path.exists():
@@ -334,39 +379,53 @@ class SiameseUnetCdRunner:
                 state_dict = payload
             if isinstance(state_dict, dict):
                 normalized_state = {key.replace("module.", ""): value for key, value in state_dict.items()}
+                normalized_state = self._adapt_state_dict_input_channels(normalized_state, input_channels)
                 model.load_state_dict(normalized_state, strict=False)
                 model_source = str(checkpoint_path)
-        self._model = model.eval()
-        self._model_source = model_source
-        return self._model
+        self._models[input_channels] = model.eval()
+        self._model_sources[input_channels] = model_source
+        return self._models[input_channels]
+
+    def _adapt_state_dict_input_channels(self, state_dict: dict[str, Any], input_channels: int) -> dict[str, Any]:
+        if torch is None:
+            return state_dict
+
+        conv_key = "enc0.0.weight"
+        weight = state_dict.get(conv_key)
+        if weight is None or not hasattr(weight, "shape"):
+            return state_dict
+
+        # Adapt first convolution weights so RGB checkpoints can initialize RGB+hint runs.
+        in_ch = int(weight.shape[1])
+        if in_ch == input_channels:
+            return state_dict
+
+        if in_ch == 3 and input_channels > 3:
+            mean_channel = weight.mean(dim=1, keepdim=True)
+            extra = mean_channel.repeat(1, input_channels - 3, 1, 1)
+            state_dict[conv_key] = torch.cat([weight, extra], dim=1)
+            return state_dict
+
+        if in_ch > input_channels:
+            state_dict[conv_key] = weight[:, :input_channels, :, :]
+            return state_dict
+
+        pad = torch.zeros((int(weight.shape[0]), input_channels - in_ch, int(weight.shape[2]), int(weight.shape[3])), dtype=weight.dtype)
+        state_dict[conv_key] = torch.cat([weight, pad], dim=1)
+        return state_dict
 
     def _discover_latest_training_checkpoint(self) -> Path | None:
-        training_root = Path(__file__).resolve().parent.parent.parent / "results" / "training"
-        if not training_root.exists():
-            return None
-
-        # best trained data is real17
-        real17_preferred = training_root / "siamese_unet_cd_real17_finetuned" / "best.pt"
-        if real17_preferred.exists():
-            return real17_preferred
-
-        preferred = training_root / "latest" / "best.pt"
-        if preferred.exists():
-            return preferred
-
-        original = training_root / "siamese_unet_cd" / "best.pt"
-        if original.exists():
-            return original
-
-        candidates = [path for path in training_root.rglob("best.pt") if path.is_file()]
-        if candidates:
-            candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-            return candidates[0]
-
-        candidates = [path for path in training_root.rglob("last.pt") if path.is_file()]
-        if candidates:
-            candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-            return candidates[0]
+        weights_root = Path(__file__).resolve().parent.parent.parent / "weights"
+        
+        # Priority 1: best trained data is real17 finetuned weights in central weights location
+        real17_finetuned = weights_root / "siamese_unet_cd_real17_finetuned_best.pt"
+        if real17_finetuned.exists():
+            return real17_finetuned
+        
+        # Priority 2: generic central weights location
+        central_weights = weights_root / "siamese_unet_cd_best.pt"
+        if central_weights.exists():
+            return central_weights
 
         return None
 
@@ -379,15 +438,26 @@ class SiameseUnetCdRunner:
             return "cpu"
         return "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
 
-    def _image_to_tensor(self, image: np.ndarray, device_used: str) -> torch.Tensor:
+    def _image_to_tensor(self, image: np.ndarray, device_used: str, dinov2_map: np.ndarray | None = None) -> torch.Tensor:
         resized = cv2.resize(image, (int(self.input_size), int(self.input_size)), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        if dinov2_map is not None:
+            hint = np.asarray(dinov2_map, dtype=np.float32)
+            if hint.ndim != 2:
+                raise ValueError("dinov2_map must be a 2D float map")
+            hint = cv2.resize(hint, (int(self.input_size), int(self.input_size)), interpolation=cv2.INTER_LINEAR)
+            hint = np.clip(hint, 0.0, 1.0)
+            rgb = np.concatenate([rgb, hint[:, :, None]], axis=2)
         tensor = torch.from_numpy(np.transpose(rgb, (2, 0, 1))).unsqueeze(0)
         if device_used == "cuda":
             tensor = tensor.cuda(non_blocking=True)
         return tensor
 
     def _postprocess_mask(self, mask: np.ndarray, overlap_mask: np.ndarray) -> np.ndarray:
+        # Ensure overlap_mask matches mask size
+        if mask.shape != overlap_mask.shape:
+            overlap_mask = cv2.resize(overlap_mask, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+        
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, tuple(SIAMESE_UNET_CD_CONFIG["morph_kernel"]))
         mask = cv2.bitwise_and(mask, overlap_mask)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=int(SIAMESE_UNET_CD_CONFIG["morph_open_iterations"]))
@@ -399,6 +469,97 @@ class SiameseUnetCdRunner:
             if stats[label, cv2.CC_STAT_AREA] >= min_area:
                 cleaned[labels == label] = 255
         return cleaned
+
+    def _warp_to_shared_canvas_ecc(
+        self,
+        before_img: np.ndarray,
+        after_img: np.ndarray,
+        warp_matrix: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Create a shared canvas for both images using ECC affine transformation (like SIFT RANSAC does)."""
+        before_h, before_w = before_img.shape[:2]
+        after_h, after_w = after_img.shape[:2]
+
+        # Convert 2x3 affine matrix to 3x3 for perspective transform
+        affine_3x3 = np.array(
+            [
+                [warp_matrix[0, 0], warp_matrix[0, 1], warp_matrix[0, 2]],
+                [warp_matrix[1, 0], warp_matrix[1, 1], warp_matrix[1, 2]],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+
+        # Get corners of after image
+        after_corners = np.float32([[0, 0], [after_w, 0], [after_w, after_h], [0, after_h]]).reshape(-1, 1, 2)
+        warped_after_corners = cv2.perspectiveTransform(after_corners, affine_3x3)
+
+        # Get before corners and compute bounding box
+        before_corners = np.float32([[0, 0], [before_w, 0], [before_w, before_h], [0, before_h]]).reshape(-1, 1, 2)
+        all_corners = np.vstack([before_corners, warped_after_corners]).reshape(-1, 2)
+        min_x = int(np.floor(all_corners[:, 0].min()))
+        min_y = int(np.floor(all_corners[:, 1].min()))
+        max_x = int(np.ceil(all_corners[:, 0].max()))
+        max_y = int(np.ceil(all_corners[:, 1].max()))
+
+        canvas_w = max(1, max_x - min_x)
+        canvas_h = max(1, max_y - min_y)
+
+        # Create translation matrix to center on (0, 0)
+        translation = np.array(
+            [
+                [1.0, 0.0, -float(min_x)],
+                [0.0, 1.0, -float(min_y)],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+
+        before_homography = translation
+        after_homography = translation @ affine_3x3
+
+        # Warp both images to the shared canvas
+        aligned_before = cv2.warpPerspective(
+            before_img,
+            before_homography,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
+        aligned_after = cv2.warpPerspective(
+            after_img,
+            after_homography,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
+
+        # Create validity masks for both warped images
+        before_valid = cv2.warpPerspective(
+            build_validity_mask((before_h, before_w)),
+            before_homography,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        after_valid = cv2.warpPerspective(
+            build_validity_mask((after_h, after_w)),
+            after_homography,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+
+        # Compute overlap mask as intersection of validity masks
+        overlap_mask = compute_overlap_mask(before_valid, after_valid, erode_kernel=(5, 5))
+
+        # Do NOT crop images - keep them at canvas size for proper aspect ratio preservation
+        # when they get resized by the model. Only return overlap_mask as-is for masking.
+        return aligned_before, aligned_after, overlap_mask
 
     def _compose_preview(self, before_img: np.ndarray, after_img: np.ndarray, probability_overlay: np.ndarray, mask_overlay: np.ndarray, alignment_mode: str) -> np.ndarray:
         panels = [

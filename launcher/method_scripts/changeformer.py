@@ -46,7 +46,7 @@ CHANGEFORMER_CONFIG = {
         # Optional env var that points to a supervised ChangeFormer checkpoint.
         "weights_env_var": "CHANGEFORMER_WEIGHTS",
         # Canonical checkpoint path used by the GUI when a trained model exists.
-        "canonical_weights_path": "results/models/changeformer/best.pt",
+        "canonical_weights_path": "weights/changeformer.pt",
         # Decoder width used by the supervised segmentation model.
         "decoder_channels": 128,
         # Side length for transformer inference.
