@@ -40,7 +40,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = $PSScriptRoot
+$repoRoot = Split-Path -Parent $PSScriptRoot
 $envDir = Join-Path $repoRoot 'conda_envs'
 $baseEnvFile = Join-Path $envDir 'base.yml'
 

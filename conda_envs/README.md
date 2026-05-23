@@ -15,9 +15,8 @@
 - matplotlib, tqdm, seaborn
 
 **Deep Learning (GPU):**
-- **pytorch** (conda)
-- **torchvision** (conda)
-- **pytorch-cuda=12.4** (conda, `nvidia` channel)
+- **torch** (pip, CUDA 13.2 wheel index)
+- **torchvision** (pip, CUDA 13.2 wheel index)
 
 **Computer Vision & ML:**
 - pycocotools
@@ -68,4 +67,4 @@ python -m launcher.gui
 
 - All methods (sift_ransac, yolov8_seg, changeformer, dinov2_cd, efficientnet_cls, siamese_unet_cd) require only this base environment
 - Conda output (solver, install progress) is displayed in real-time during installation
-- PyTorch is installed from conda channels (`pytorch` + `nvidia`) for better Windows binary compatibility
+- PyTorch is installed from the PyTorch CUDA wheel index (`cu132`) for better Windows binary compatibility

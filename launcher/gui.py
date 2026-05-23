@@ -58,6 +58,45 @@ def _find_conda_exe() -> Path | None:
     return None
 
 
+def _find_env_python(env_name: str) -> Path | None:
+    # 1. Try to find the conda executable first to infer the envs directory
+    conda_exe = _find_conda_exe()
+    if conda_exe:
+        # conda_exe is usually in <base>\Scripts\conda.exe
+        # or <base>\condabin\conda.bat
+        conda_base = None
+        if conda_exe.parent.name == "Scripts":
+            conda_base = conda_exe.parent.parent
+        elif conda_exe.parent.name == "condabin":
+            conda_base = conda_exe.parent.parent
+        
+        if conda_base:
+            env_python = conda_base / "envs" / env_name / "python.exe"
+            if env_python.exists():
+                return env_python
+
+    # 2. Fallback to common locations if conda exe doesn't help
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    candidates = [
+        Path(r"C:\ProgramData\anaconda3\envs") / env_name / "python.exe",
+        Path(r"C:\ProgramData\miniconda3\envs") / env_name / "python.exe",
+        Path.home() / "anaconda3" / "envs" / env_name / "python.exe",
+        Path.home() / "miniconda3" / "envs" / env_name / "python.exe",
+        Path.home() / ".conda" / "envs" / env_name / "python.exe",
+    ]
+    if local_appdata:
+        candidates.extend([
+            Path(local_appdata) / "anaconda3" / "envs" / env_name / "python.exe",
+            Path(local_appdata) / "miniconda3" / "envs" / env_name / "python.exe",
+        ])
+    
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+            
+    return None
+
+
 def _current_python_executable() -> Path | None:
     python_exe = Path(sys.executable)
     if python_exe.exists() and any(part.lower() == "envs" for part in python_exe.parts):
@@ -269,30 +308,47 @@ class LauncherApp(tk.Tk):
         result_file = Path(tempfile.gettempdir()) / "projekt_photo_pairs" / "gui_results" / f"{method_id}_{before_path.stem}_{after_path.stem}_{uuid4().hex}.json"
         result_file.parent.mkdir(parents=True, exist_ok=True)
 
-        conda_exe = _find_conda_exe()
-        if conda_exe is None:
-            raise RuntimeError("conda.exe was not found for launching the method in its own environment.")
-
         env = os.environ.copy()
         env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-        command = [
-            str(conda_exe),
-            "run",
-            "-n",
-            spec.env_name,
-            "python",
-            "-m",
-            "launcher.worker",
-            "--method-id",
-            method_id,
-            "--before",
-            str(before_path),
-            "--after",
-            str(after_path),
-            "--output",
-            str(result_file),
-        ]
+        # Prefer running the environment's python directly to avoid 'conda run' activation issues
+        env_python = _find_env_python(spec.env_name)
+        if env_python:
+            command = [
+                str(env_python),
+                "-m",
+                "launcher.worker",
+                "--method-id",
+                method_id,
+                "--before",
+                str(before_path),
+                "--after",
+                str(after_path),
+                "--output",
+                str(result_file),
+            ]
+        else:
+            conda_exe = _find_conda_exe()
+            if conda_exe is None:
+                raise RuntimeError("Could not find conda.exe or environment python to launch the worker.")
+            
+            command = [
+                str(conda_exe),
+                "run",
+                "-n",
+                spec.env_name,
+                "python",
+                "-m",
+                "launcher.worker",
+                "--method-id",
+                method_id,
+                "--before",
+                str(before_path),
+                "--after",
+                str(after_path),
+                "--output",
+                str(result_file),
+            ]
 
         completed = subprocess.run(
             command, 
