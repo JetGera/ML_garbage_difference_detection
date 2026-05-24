@@ -39,16 +39,16 @@ except ImportError:
 
 EFFICIENTNET_CLS_CONFIG = {
     # Model architecture name passed to timm.create_model.
-    "model_name": "efficientnet_b0",
+    "model_name": "efficientnet_b2",
     # Optional environment variable with path to a trained binary checkpoint.
     "weights_env_var": "EFFICIENTNET_CLS_WEIGHTS",
     # Input side used for inference preprocessing.
-    "input_size": 224,
+    "input_size": 384,
     # ImageNet normalization constants.
     "mean": (0.485, 0.456, 0.406),
     "std": (0.229, 0.224, 0.225),
     # Dirty probability threshold for class label.
-    "dirty_threshold": 0.42,
+    "dirty_threshold": 0.39,
     # If no trained binary checkpoint is provided, dirty score is approximated
     # from ImageNet class probabilities matching these keywords.
     "dirty_keywords": (
@@ -66,10 +66,11 @@ EFFICIENTNET_CLS_CONFIG = {
     "proxy_keyword_weight": 0.75,
     "proxy_entropy_weight": 0.25,
     # Multi-crop aggregation for local trash evidence.
-    "score_crop_scale": 0.58,
-    "score_crop_min_side": 112,
-    "score_crop_max_count": 6,
-    "score_crop_max_weight": 0.72,
+    "score_crop_scale": 0.48,
+    "score_crop_scales": (0.22, 0.34, 0.48, 0.64),
+    "score_crop_min_side": 60,
+    "score_crop_max_count": 15,
+    "score_crop_max_weight": 0.92,
     # Difference heatmap tuning.
     "difference_focus_bottom_weight": 1.35,
     "difference_focus_center_weight": 1.10,
@@ -109,6 +110,7 @@ class EfficientNetClsRunner:
         self._model = None
         self._model_source = None
         self._inference_mode = "imagenet_proxy"
+        self.input_size = int(EFFICIENTNET_CLS_CONFIG["input_size"])
         self._imagenet_labels = self._load_imagenet_labels()
         self._dirty_class_indices = self._resolve_dirty_class_indices(self._imagenet_labels)
         self._torch_import_available = torch is not None and timm is not None
@@ -122,6 +124,8 @@ class EfficientNetClsRunner:
         after = Path(after_path)
         before_img = self._read_color_image(before)
         after_img = self._read_color_image(after)
+        model = None
+        device_obj = None
 
         if self._torch_import_available:
             try:
@@ -171,7 +175,7 @@ class EfficientNetClsRunner:
             "device_used": device_used,
             "force_cpu": bool(self.force_cpu),
             "cuda_available": bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()),
-            "input_size": int(EFFICIENTNET_CLS_CONFIG["input_size"]),
+            "input_size": int(self.input_size),
             "dirty_threshold": float(self.dirty_threshold),
             "dirty_keyword_classes": int(len(self._dirty_class_indices)),
             "before_crop_count": int(before_pred.get("crop_count", 1)),
@@ -245,11 +249,15 @@ class EfficientNetClsRunner:
         if checkpoint_path is not None:
             if not checkpoint_path.exists():
                 raise RuntimeError(f"Weights file does not exist: {checkpoint_path}")
-            model = timm.create_model(self.model_name, pretrained=False, num_classes=2)
             try:
                 payload = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
             except TypeError:
                 payload = torch.load(str(checkpoint_path), map_location="cpu")
+            checkpoint_model_name = self._extract_checkpoint_model_name(payload) or self.model_name
+            checkpoint_input_size = self._extract_checkpoint_image_size(payload) or self.input_size
+            self.model_name = str(checkpoint_model_name)
+            self.input_size = int(checkpoint_input_size)
+            model = timm.create_model(self.model_name, pretrained=False, num_classes=2)
             state_dict = self._extract_state_dict(payload)
             load_result = model.load_state_dict(state_dict, strict=False)
             if not self._has_any_loaded_parameters(load_result):
@@ -288,6 +296,50 @@ class EfficientNetClsRunner:
         except OSError:
             mtime_ns = 0
         return f"checkpoint:{checkpoint_path.resolve()}:{mtime_ns}"
+
+    def _extract_checkpoint_model_name(self, payload: Any) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+
+        model_name = payload.get("model_name")
+        if isinstance(model_name, str) and model_name.strip():
+            return model_name.strip()
+
+        train_args = payload.get("train_args")
+        if isinstance(train_args, dict):
+            model_name = train_args.get("model_name")
+            if isinstance(model_name, str) and model_name.strip():
+                return model_name.strip()
+
+        extra = payload.get("extra")
+        if isinstance(extra, dict):
+            model_name = extra.get("model_name")
+            if isinstance(model_name, str) and model_name.strip():
+                return model_name.strip()
+
+        return None
+
+    def _extract_checkpoint_image_size(self, payload: Any) -> int | None:
+        if not isinstance(payload, dict):
+            return None
+
+        image_size = payload.get("image_size")
+        if isinstance(image_size, (int, float)) and int(image_size) > 0:
+            return int(image_size)
+
+        train_args = payload.get("train_args")
+        if isinstance(train_args, dict):
+            image_size = train_args.get("image_size")
+            if isinstance(image_size, (int, float)) and int(image_size) > 0:
+                return int(image_size)
+
+        extra = payload.get("extra")
+        if isinstance(extra, dict):
+            image_size = extra.get("image_size")
+            if isinstance(image_size, (int, float)) and int(image_size) > 0:
+                return int(image_size)
+
+        return None
 
     def _discover_latest_training_checkpoint(self) -> Path | None:
         # First try central weights location
@@ -397,7 +449,7 @@ class EfficientNetClsRunner:
         return output
 
     def _preprocess_image(self, image_bgr: np.ndarray):
-        size = int(EFFICIENTNET_CLS_CONFIG["input_size"])
+        size = int(self.input_size)
         resized = cv2.resize(image_bgr, (size, size), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         arr = rgb.astype(np.float32) / 255.0
@@ -502,40 +554,49 @@ class EfficientNetClsRunner:
         if height <= 0 or width <= 0:
             return [image]
 
-        crop_side = max(
-            int(EFFICIENTNET_CLS_CONFIG["score_crop_min_side"]),
-            int(round(min(height, width) * float(EFFICIENTNET_CLS_CONFIG["score_crop_scale"]))),
-        )
-        crop_side = min(crop_side, min(height, width))
-
-        if crop_side <= 0:
-            return [image]
-
-        half_w = max(0, width - crop_side)
-        half_h = max(0, height - crop_side)
-        positions = [
-            (0, 0),
-            (half_w, 0),
-            (0, half_h),
-            (half_w, half_h),
-            (half_w // 2, half_h // 2),
-        ]
-
         crops: list[np.ndarray] = [image]
         seen: set[tuple[int, int]] = set()
-        for x0, y0 in positions:
-            x0 = int(np.clip(x0, 0, half_w))
-            y0 = int(np.clip(y0, 0, half_h))
-            key = (x0, y0)
-            if key in seen:
+        crop_scales = EFFICIENTNET_CLS_CONFIG.get("score_crop_scales", (EFFICIENTNET_CLS_CONFIG["score_crop_scale"],))
+        for scale in crop_scales:
+            crop_side = max(
+                int(EFFICIENTNET_CLS_CONFIG["score_crop_min_side"]),
+                int(round(min(height, width) * float(scale))),
+            )
+            crop_side = min(crop_side, min(height, width))
+            if crop_side <= 0:
                 continue
-            seen.add(key)
-            crop = image[y0 : y0 + crop_side, x0 : x0 + crop_side]
-            if crop.size == 0:
-                continue
-            crops.append(crop)
-            if len(crops) >= int(EFFICIENTNET_CLS_CONFIG["score_crop_max_count"]):
-                break
+
+            max_x = max(0, width - crop_side)
+            max_y = max(0, height - crop_side)
+            mid_x = max_x // 2
+            mid_y = max_y // 2
+
+            # Bias toward the lower image half, then cover the center and top if we still have budget.
+            positions = [
+                (0, max_y),
+                (mid_x, max_y),
+                (max_x, max_y),
+                (0, mid_y),
+                (mid_x, mid_y),
+                (max_x, mid_y),
+                (0, 0),
+                (mid_x, 0),
+                (max_x, 0),
+            ]
+
+            for x0, y0 in positions:
+                x0 = int(np.clip(x0, 0, max_x))
+                y0 = int(np.clip(y0, 0, max_y))
+                key = (x0, y0, crop_side)
+                if key in seen:
+                    continue
+                seen.add(key)
+                crop = image[y0 : y0 + crop_side, x0 : x0 + crop_side]
+                if crop.size == 0:
+                    continue
+                crops.append(crop)
+                if len(crops) >= int(EFFICIENTNET_CLS_CONFIG["score_crop_max_count"]):
+                    return crops
         return crops
 
     def _aggregate_crop_predictions(self, predictions: list[dict[str, Any]]) -> dict[str, Any]:

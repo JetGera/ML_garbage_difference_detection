@@ -1,0 +1,35 @@
+{
+  "source_checkpoint": "D:\\ML_garbage_difference_detection\\results\\training\\20260524_002013__changeformer_100e_dataset__4c415bec\\best.pt",
+  "canonical_checkpoint": "D:\\ML_garbage_difference_detection\\weights\\changeformer_best.pt",
+  "updated_at": "2026-05-24T00:38:31",
+  "metadata": {
+    "dataset_root": "D:\\ML_garbage_difference_detection\\Dataset\\!masks_for_training",
+    "output_dir": "D:\\ML_garbage_difference_detection\\results\\training\\20260524_002013__changeformer_100e_dataset__4c415bec",
+    "sample_count": 51,
+    "train_count": 41,
+    "val_count": 10,
+    "positive_pixels_train": 3648397,
+    "negative_pixels_train": 347377977,
+    "pos_weight": 25.0,
+    "backbone_name": "pvt_v2_b0",
+    "decoder_channels": 128,
+    "dropout": 0.1,
+    "image_size": 384,
+    "device": "cpu",
+    "val_metrics": {
+      "accuracy": 0.97550048828125,
+      "precision": 0.8358180458544813,
+      "recall": 0.871524321454642,
+      "f1": 0.853297814451745,
+      "iou": 0.7441320206813514,
+      "dice": 0.8532978144517449,
+      "tp": 105064.0,
+      "tn": 1333370.0,
+      "fp": 20638.0,
+      "fn": 15488.0
+    },
+    "best_epoch": 29,
+    "best_f1": 0.853297814451745,
+    "best_iou": 0.7441320206813514
+  }
+}

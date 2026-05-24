@@ -46,27 +46,27 @@ CHANGEFORMER_CONFIG = {
         # Optional env var that points to a supervised ChangeFormer checkpoint.
         "weights_env_var": "CHANGEFORMER_WEIGHTS",
         # Canonical checkpoint path used by the GUI when a trained model exists.
-        "canonical_weights_path": "weights/changeformer.pt",
+        "canonical_weights_path": "weights/changeformer_best.pt",
         # Decoder width used by the supervised segmentation model.
         "decoder_channels": 128,
         # Side length for transformer inference.
         "input_size": 512,
         # Percentile used to convert the probability map into a binary change mask.
-        "threshold_percentile": 93.0,
+        "threshold_percentile": 76.0,
         # Additional threshold offset relative to Otsu on probability values.
-        "otsu_threshold_offset": 0.05,
+        "otsu_threshold_offset": 0.0,
         # Morphology and component filtering settings for the final mask.
-        "morph_kernel": (7, 7),
-        "morph_open_iterations": 2,
-        "morph_close_iterations": 1,
-        "overlap_erode_kernel": 9,
-        "min_component_area_px": 320,
-        "min_component_area_ratio": 0.0022,
-        "min_component_width_px": 10,
-        "min_component_height_px": 8,
+        "morph_kernel": (3, 3),
+        "morph_open_iterations": 1,
+        "morph_close_iterations": 2,
+        "overlap_erode_kernel": 5,
+        "min_component_area_px": 60,
+        "min_component_area_ratio": 0.0007,
+        "min_component_width_px": 5,
+        "min_component_height_px": 5,
         "max_component_aspect_ratio": 8.0,
         "drop_border_components": True,
-        "border_margin_px": 4,
+        "border_margin_px": 2,
         # Rendering settings.
         "colormap": cv2.COLORMAP_TURBO,
         "overlay_alpha": 0.58,
@@ -76,7 +76,7 @@ CHANGEFORMER_CONFIG = {
         # ECC alignment settings.
         "ecc_max_iterations": 120,
         "ecc_eps": 1e-6,
-        "ecc_rotation_candidates": (0, 90, 180, 270),
+        "ecc_rotation_candidates": (0,),
         "ecc_motion_models": (
             cv2.MOTION_HOMOGRAPHY,
             cv2.MOTION_AFFINE,
@@ -95,15 +95,15 @@ CHANGEFORMER_CONFIG = {
         # Suppress edge-dominated noise (tree branches, texture flicker).
         "edge_suppression_weight": 0.22,
         # Confidence filters for connected components.
-        "min_component_mean_prob": 0.48,
-        "min_component_peak_prob": 0.68,
-        "max_component_area_ratio": 0.10,
-        "min_component_center_y_ratio": 0.30,
-        "top_region_peak_override": 0.88,
+        "min_component_mean_prob": 0.26,
+        "min_component_peak_prob": 0.40,
+        "max_component_area_ratio": 0.25,
+        "min_component_center_y_ratio": 0.14,
+        "top_region_peak_override": 0.74,
         # Relaxed rescue rule for compact high-confidence detections in the upper image region.
-        "top_region_relaxed_peak_prob": 0.74,
-        "top_region_relaxed_min_mean_prob": 0.50,
-        "top_region_relaxed_max_area_ratio": 0.015,
+        "top_region_relaxed_peak_prob": 0.50,
+        "top_region_relaxed_min_mean_prob": 0.26,
+        "top_region_relaxed_max_area_ratio": 0.05,
     }
 
 SIFT_CONFIG = {
@@ -311,6 +311,14 @@ def resolve_latest_changeformer_checkpoint() -> Path | None:
     canonical_checkpoint = project_root / str(CHANGEFORMER_CONFIG["canonical_weights_path"])
     if canonical_checkpoint.exists():
         return canonical_checkpoint
+
+    legacy_checkpoints = [
+        project_root / "weights" / "changeformer.pt",
+        project_root / "results" / "models" / "changeformer" / "best.pt",
+    ]
+    for checkpoint in legacy_checkpoints:
+        if checkpoint.exists():
+            return checkpoint
 
     training_root = project_root / "results" / "training"
     if not training_root.exists():
@@ -610,7 +618,10 @@ class ChangeformerRunner:
         if inliers < int(ALIGNMENT_CONFIG["min_inliers_for_homography"]) or inlier_ratio < float(ALIGNMENT_CONFIG["min_inlier_ratio"]):
             return None
 
-        aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, homography)
+        try:
+            aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, homography)
+        except ValueError:
+            return None
         overlap_ratio = float(np.count_nonzero(overlap_mask) / max(overlap_mask.size, 1))
         if overlap_ratio <= 0.05:
             return None
@@ -830,7 +841,10 @@ class ChangeformerRunner:
         else:
             motion_name = "affine" if motion_type == cv2.MOTION_AFFINE else "euclidean"
 
-        aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, after_to_before_transform)
+        try:
+            aligned_before, aligned_after, overlap_mask = self._warp_to_shared_canvas(before_img, after_img, after_to_before_transform)
+        except ValueError:
+            return None
         overlap_ratio = float(np.count_nonzero(overlap_mask) / max(overlap_mask.size, 1))
         if overlap_ratio <= 0.05:
             return None

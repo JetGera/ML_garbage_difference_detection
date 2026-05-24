@@ -23,8 +23,8 @@ class MethodSpec:
 
 
 METHOD_SPECS = {
-    "changeformer": MethodSpec("ChangeFormer", "projekt-base", CONDA_ENV_DIR / "base.yml"),
-    "changeformer_dinov2": MethodSpec("ChangeFormer + DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
+    "changeformer": MethodSpec("ChangeFormer", "projekt-changeformer", CONDA_ENV_DIR / "base.yml"),
+    "changeformer_dinov2": MethodSpec("ChangeFormer + DINOv2", "projekt-changeformer", CONDA_ENV_DIR / "base.yml"),
     "dinov2": MethodSpec("DINOv2", "projekt-base", CONDA_ENV_DIR / "base.yml"),
     "efficientnet": MethodSpec("EfficientNet", "projekt-base", CONDA_ENV_DIR / "base.yml"),
     "sift_ransac": MethodSpec("SIFT + RANSAC + difference map", "projekt-base", CONDA_ENV_DIR / "base.yml"),

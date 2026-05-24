@@ -33,7 +33,7 @@ except ImportError:
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DATASET_ROOT = BASE_DIR / "Garbage Pairs Dataset" / "!masks_for_training"
+DEFAULT_DATASET_ROOT = BASE_DIR / "Dataset" / "!masks_for_training"
 DEFAULT_OUTPUT_ROOT = BASE_DIR / "results" / "training"
 DEFAULT_CANONICAL_WEIGHTS = BASE_DIR / "weights" / "changeformer_best.pt"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
