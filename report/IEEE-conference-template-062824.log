@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.2.23)  13 MAY 2026 00:29
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.2.23)  3 JUN 2026 21:54
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -300,6 +300,11 @@ Package epstopdf-base Info: Redefining graphics rule for `.eps' on input line 4
 (D:\MikTex\tex/latex/00miktex\epstopdf-sys.cfg
 File: epstopdf-sys.cfg 2021/03/18 v2.0 Configuration of epstopdf for MiKTeX
 ))
+Underfull \hbox (badness 1360) in paragraph at lines 49--50
+\OT1/ptm/m/n/10 spra-co-v-anie sn[]^^Pmok [3] a YOLOv8-seg pre seg-ment[]aciu
+ []
+
+
 Underfull \hbox (badness 2042) in paragraph at lines 53--54
 \OT1/ptm/m/n/10 o ref-eren[]cn[]e sn[]^^Pmky pred a po vy[]cisten[]^^P, ktor[]e
  sl[]u[]zia
@@ -378,6 +383,12 @@ File: foto/ChangeFormer.png Graphic file (type png)
 <use foto/ChangeFormer.png>
 Package pdftex.def Info: foto/ChangeFormer.png  used on input line 139.
 (pdftex.def)             Requested size: 214.20154pt x 143.08516pt.
+
+Underfull \hbox (badness 1688) in paragraph at lines 147--148
+[]\OT1/ptm/m/n/10 Pri tr[]eningu Ef-fi-cient-Net je z[]akladom bin[]arny datase
+t
+ []
+
 LaTeX Font Info:    Trying to load font information for U+msa on input line 148
 .
 (D:\MikTex\tex/latex/amsfonts\umsa.fd
@@ -399,13 +410,13 @@ File: foto/sift ransac.png Graphic file (type png)
 <use foto/sift ransac.png>
 Package pdftex.def Info: foto/sift ransac.png  used on input line 171.
 (pdftex.def)             Requested size: 214.20154pt x 142.09572pt.
-[4 <./foto/efficientNet.png> <./foto/sift ransac.png>]
+
 Underfull \hbox (badness 1354) in paragraph at lines 214--215
 \OT1/ptm/m/n/10 nanie sn[]^^Pmok, vi-acero met[]od de-tek-cie zmien a grafick[]
 e
  []
 
-
+[4 <./foto/efficientNet.png> <./foto/sift ransac.png>]
 Underfull \hbox (badness 8132) in paragraph at lines 218--219
 []\OT1/ptm/m/n/10 Celkov[]y pr[]^^Pnos pr[]ace spo[]c[]^^Pva v tom, []ze vznikl
 a
@@ -433,7 +444,7 @@ L3 programming layer <2025-12-24>
 Here is how much of TeX's memory you used:
  4270 strings out of 467870
  65715 string characters out of 5435184
- 497638 words of memory out of 5000000
+ 498638 words of memory out of 5000000
  33116 multiletter control sequences out of 15000+600000
  665854 words of font info for 112 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
@@ -444,7 +455,7 @@ ublic/amsfonts/cm/cmmi7.pfb><D:/MikTex/fonts/type1/public/amsfonts/cm/cmr10.pfb
 blic/amsfonts/cm/cmsy8.pfb><D:/MikTex/fonts/type1/urw/times/utmb8a.pfb><D:/MikT
 ex/fonts/type1/urw/times/utmbi8a.pfb><D:/MikTex/fonts/type1/urw/times/utmr8a.pf
 b><D:/MikTex/fonts/type1/urw/times/utmri8a.pfb>
-Output written on IEEE-conference-template-062824.pdf (5 pages, 93285201 bytes)
+Output written on IEEE-conference-template-062824.pdf (5 pages, 93285029 bytes)
 .
 PDF statistics:
  78 PDF objects out of 1000 (max. 8388607)
