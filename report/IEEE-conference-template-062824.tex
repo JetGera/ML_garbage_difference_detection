@@ -105,7 +105,7 @@ Po spracovaní program vytvorí výslednú masku, overlay snímku a textový sú
 \section{Siamese U-Net}
 Siamese U-Net je metóda určená na porovnávanie dvojice snímok pred a po vyčistení. Obe fotografie sa spracúvajú súčasne cez dve vetvy siete, ktoré zdieľajú váhy a vyhodnocujú rozdiely medzi vstupmi. Pred inferenciou sa dvojica zarovná, aby sa znížil vplyv posunu kamery a rozdielneho uhla snímania.
 
-Pri tréningu Siamese U-Net sme používali dve vetvy s encoderom ResNet34 s ImageNet predtrénovaním a decoder pre výstup binárnej change masky \cite{daudt2018fully}. Vstup mal veľkosť 384\,\,x\,\,384 a model sa učil na pároch snímok pred a po spolu s maskami zmeny. Ako loss sme používali kombináciu BCEWithLogitsLoss s váhou pre pozitívne pixely a Soft Dice loss, optimalizácia prebiehala cez AdamW a rozvrh učenia používal CosineAnnealingLR s warmupom. Tréning bol nastavený na 70 epoch, batch size 2, gradient accumulation 4 a early stopping s patience 12.
+Pri tréningu Siamese U-Net sme používali dve vetvy s encoderom ResNet34 s ImageNet predtrénovaním a decoder pre výstup binárnej change masky \cite{daudt2018fully}. Vstup mal veľkosť 384\,\,x\,\,384 a model sa učil na pároch snímok pred a po spolu s maskami zmeny. Ako loss sme používali kombináciu BCEWithLogitsLoss s váhou pre pozitívne pixely a Soft Dice loss, optimalizácia prebiehala cez AdamW. Tréning bol nastavený na 70 epoch, batch size 2, gradient accumulation 4 a early stopping s patience 12.
 
 Výstupom metódy je mapa zmeny a binárna maska oblastí, kde sa pravdepodobne nachádzal odstránený odpad. Následne sa použije jednoduché postprocesovanie, aby sa odstránil šum a zvýraznili súvislé oblasti zmeny. Obrázok \ref{fig:siamese} ukazuje príklad výsledku tejto metódy v programe.
 
