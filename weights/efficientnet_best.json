@@ -1,0 +1,45 @@
+{
+  "source_checkpoint": "results\\training\\20260524_214438__efficientnet_b2_384_50ep__e65fce87\\best.pt",
+  "canonical_checkpoint": "weights\\efficientnet_best.pt",
+  "updated_at": "2026-05-24T22:12:01",
+  "metadata": {
+    "dataset_mode": "pair_binary",
+    "train_count": 82,
+    "val_count": 20,
+    "class_counts_train": [
+      41,
+      41
+    ],
+    "clean_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__d9cca79195b3\\train\\clean",
+    "dirty_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__d9cca79195b3\\train\\dirty",
+    "val_clean_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__d9cca79195b3\\val\\clean",
+    "val_dirty_dir": "results\\training\\prepared_datasets\\pairs_binary_dataset__d9cca79195b3\\val\\dirty",
+    "taco_root": null,
+    "pairs_root": "D:\\ML_garbage_difference_detection\\Dataset",
+    "taco_metadata": null,
+    "pair_metadata": {
+      "signature": "d9cca79195b3",
+      "pairs_root": "d:\\ML_garbage_difference_detection\\Dataset",
+      "split_strategy": "pair_level",
+      "val_fraction": 0.2,
+      "export_max_side": 768,
+      "source_pairs": 51,
+      "train_pair_count": 41,
+      "val_pair_count": 10,
+      "train": {
+        "source_pairs": 41,
+        "dirty_samples": 41,
+        "clean_samples": 41,
+        "missing_images": 0
+      },
+      "val": {
+        "source_pairs": 10,
+        "dirty_samples": 10,
+        "clean_samples": 10,
+        "missing_images": 0
+      }
+    },
+    "best_epoch": 24,
+    "best_f1_dirty": 0.8571428571428572
+  }
+}

@@ -24,7 +24,8 @@ training/
 /runs
 /datasets
 /Garbage Pairs Dataset
-
+/Dataset
+/Bonus
 # Model weights (training outputs)
 results/models/
 results/training/

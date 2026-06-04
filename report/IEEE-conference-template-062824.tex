@@ -46,7 +46,7 @@ Komunitné čistiace akcie vytvárajú prirodzený scenár pre analýzu zmien pr
 
 Hlavným problémom je, že pred a po fotografie sú v reálnych podmienkach často nezarovnané. Líšia sa uhlom snímania, vzdialenosťou od scény, osvetlením, prítomnosťou ľudí aj sezónnymi zmenami pozadia. Preto nestačí jednoduché porovnanie pixelov bez predspracovania. V projekte sa preto sústreďujeme na pipeline, ktorá najprv fotografie zarovná a až potom hľadá zmeny pomocou klasických aj hlbokých metód.
 
-Naša implementácia zahŕňa viacero prístupov, aby bolo možné porovnať ich správanie v rovnakom vstupnom scenári. Klasická vetva používa SIFT + RANSAC a diferenčný obraz v prekrytej oblasti \cite{lowe2004distinctive,fischler1981random}. Hlbšie prístupy zastupuje ChangeFormer \cite{changeformer2021}, ktorý sa pri nedostupnosti knižníc automaticky prepína do klasického CV fallbacku, ďalej DINOv2 na vizuálne reprezentácie \cite{oquab2023dinov2}, EfficientNet pre odhad čistého a znečisteného stavu \cite{tan2019efficientnet}, Siamese U-Net pre párové spracovanie snímok \cite{daudt2018fully} a YOLOv8-seg pre segmentáciu odpadu \cite{ultralyticsyolo}. Cieľom nie je iba označiť zmenu, ale aj čo najpresnejšie lokalizovať odstránený odpad a získať aspoň približný odhad rozsahu vyzbieraného materiálu.
+Naša implementácia zahŕňa viacero prístupov, aby bolo možné porovnať ich správanie v rovnakom vstupnom scenári. Klasická vetva používa SIFT + RANSAC a diferenčný obraz v prekrytej oblasti \cite{lowe2004distinctive,fischler1981random}. Hlbšie prístupy zastupuje ChangeFormer \cite{changeformer2021}, ktorý sa pri nedostupnosti knižníc automaticky prepína do klasického CV fallbacku, ďalej DINOv2 na vizuálne reprezentácie \cite{oquab2023dinov2}, pretrénovaný EfficientNet ako binárny klasifikátor clean/dirty \cite{tan2019efficientnet}, Siamese U-Net pre párové spracovanie snímok \cite{daudt2018fully} a YOLOv8-seg pre segmentáciu odpadu \cite{ultralyticsyolo}. Cieľom nie je iba označiť zmenu, ale aj čo najpresnejšie lokalizovať odstránený odpad a získať aspoň približný odhad rozsahu vyzbieraného materiálu.
 
 V ďalších častiach práce budeme porovnávať tieto prístupy na rovnakých dvojiciach snímok a vyhodnocovať ich pomocou metrík ako IoU, Dice, prípadne chyby pri odhade množstva odpadu. Zároveň nás zaujíma robustnosť voči skutočným podmienkam, v ktorých sa komunitné akcie odohrávajú, teda voči meniacemu sa uhlu pohľadu, osvetleniu a rušivým objektom v scéne.
 
@@ -72,9 +72,9 @@ Ako spoločný príklad vstupnej dvojice pre všetky metódy používame dvojicu
 \section{Datová sada}
 Priamy dataset párov pred a po vyčistení vybraného miesta momentálne neexistuje, preto bolo potrebné vytvoriť vlastný dátový súbor manuálne.
 
-Náš dataset v priečinku \textit{Garbage Pairs Dataset} obsahuje 49 párových zložiek, ktoré obsahujú použiteľnú dvojicu snímok pred a po vyčistení. 
+Náš dataset v priečinku \textit{Garbage Pairs Dataset} obsahuje 50 párových zložiek, ktoré obsahujú použiteľnú dvojicu snímok pred a po vyčistení. 
 V rámci datasetu sa nachádzajú tri typy párov: páry pochádzajúce z internetu, páry nasnímané vlastnou činnosťou a páry, pri ktorých bola fotografia od odpadu vyčistená pomocou AI.
-Pre 14 párov fotografií sme vytvorili aj vlastné binárne masky odstráneného odpadu. Tieto masky sú uložené v priečinku \textit{!masks\_for\_training} a slúžia najmä na tréning a vyhodnotenie segmentačných a change-detection modelov. Masky označujú oblasti, kde sa po vyčistení zmenila scéna a odpad bol odstránený.
+Pre 50 párov fotografií sme vytvorili aj vlastné binárne masky odstráneného odpadu. Tieto masky sú uložené v priečinku \textit{!masks\_for\_training} a slúžia najmä na tréning a vyhodnotenie segmentačných a change-detection modelov. Masky označujú oblasti, kde sa po vyčistení zmenila scéna a odpad bol odstránený.
 
 \section{Programová pipeline a funkčnosť}
 Naše riešenie je grafická aplikácia. Používateľ si vyberie priečinok s dvojicou fotografií, zvolí metódu a spustí spracovanie. Nastavenie jednotlivých modelov prebehne automaticky podľa zvolenej metódy. Po výbere vstupného priečinka program automaticky identifikuje dvojicu snímok pred a po vyčistení podľa názvov súborov a následne spustí vybraný model v príslušnom conda prostredí. Tento postup je dôležitý preto, aby každá metóda fungovala izolovane so svojimi vlastnými závislosťami a neovplyvňovala ostatné modely.
@@ -92,7 +92,7 @@ Používateľské rozhranie zobrazuje vstupnú dvojicu, výsledný panel a texto
 \section{YOLOv8-seg}
 Metóda YOLOv8-seg slúži na segmentáciu odpadu v jednotlivých snímkach. V našej implementácii sa používa ako samostatná vetva spracovania, ktorá načíta model, vykoná inferenciu nad dvojicou fotografií pred a po vyčistení a následne vytvorí prehľadnú vizualizáciu výsledkov. Metóda pracuje s maskami objektov, takže je vhodná tam, kde chceme presnejšie určiť tvar a rozsah odpadu v scéne \cite{ultralyticsyolo}.
 
-Pri tréningu YOLOv8-seg sme najprv automaticky pripravili export dát z TACO do formátu kompatibilného s Ultralytics. Dataset sa delil na tréningovú, validačnú a testovaciu časť podľa pomeru 80/10/10 a pracoval s jednou triedou ``trash''. Tréning prebiehal približne 90 epoch s malou batch size 2, vstupným rozlíšením 768 px, cache režimom na disku, zapnutým AMP a early stoppingom s patience 20. Ako vstupný checkpoint sa používal predtrénovaný model YOLOv8m alebo záložný YOLOv8s-seg.
+Pri tréningu YOLOv8-seg sme najprv automaticky pripravili export dát do formátu kompatibilného s Ultralytics. Dataset sa delil na tréningovú, validačnú a testovaciu časť podľa pomeru 80/10/10 a pracoval s jednou triedou ``trash''. Tréning prebiehal približne 90 epoch s malou batch size 2, vstupným rozlíšením 768 px, cache režimom na disku, zapnutým AMP a early stoppingom s patience 20. Ako vstupný checkpoint sa používal predtrénovaný model YOLOv8m alebo záložný YOLOv8s-seg.
 
 Po spracovaní program vytvorí výslednú masku, overlay snímku a textový súhrn s informáciami o priebehu inferencie. Obrázok \ref{fig:yolo} ukazuje príklad výstupu tejto metódy v našej aplikácii.
 
@@ -105,7 +105,7 @@ Po spracovaní program vytvorí výslednú masku, overlay snímku a textový sú
 \section{Siamese U-Net}
 Siamese U-Net je metóda určená na porovnávanie dvojice snímok pred a po vyčistení. Obe fotografie sa spracúvajú súčasne cez dve vetvy siete, ktoré zdieľajú váhy a vyhodnocujú rozdiely medzi vstupmi. Pred inferenciou sa dvojica zarovná, aby sa znížil vplyv posunu kamery a rozdielneho uhla snímania.
 
-Pri tréningu Siamese U-Net sme používali dve vetvy s encoderom ResNet34 s ImageNet predtrénovaním a decoder pre výstup binárnej change masky \cite{daudt2018fully}. Vstup mal veľkosť 384\,\,x\,\,384 a model sa učil na pároch snímok pred a po spolu s maskami zmeny. Ako loss sme používali kombináciu BCEWithLogitsLoss s váhou pre pozitívne pixely a Soft Dice loss, optimalizácia prebiehala cez AdamW a rozvrh učenia používal CosineAnnealingLR s warmupom. Tréning bol nastavený na 70 epoch, batch size 2, gradient accumulation 4 a early stopping s patience 12.
+Pri tréningu Siamese U-Net sme používali dve vetvy s encoderom ResNet34 s ImageNet predtrénovaním a decoder pre výstup binárnej change masky \cite{daudt2018fully}. Vstup mal veľkosť 384\,\,x\,\,384 a model sa učil na pároch snímok pred a po spolu s maskami zmeny. Ako loss sme používali kombináciu BCEWithLogitsLoss s váhou pre pozitívne pixely a Soft Dice loss, optimalizácia prebiehala cez AdamW. Tréning bol nastavený na 70 epoch, batch size 2, gradient accumulation 4 a early stopping s patience 12.
 
 Výstupom metódy je mapa zmeny a binárna maska oblastí, kde sa pravdepodobne nachádzal odstránený odpad. Následne sa použije jednoduché postprocesovanie, aby sa odstránil šum a zvýraznili súvislé oblasti zmeny. Obrázok \ref{fig:siamese} ukazuje príklad výsledku tejto metódy v programe.
 
@@ -129,7 +129,7 @@ Z výstupu sa potom počíta aj odhad miery vyčistenia. Metóda využíva kvali
 \end{figure}
 
 \section{ChangeFormer}
-ChangeFormer je metóda založená na porovnaní dvojice snímok pomocou transformerových príznakov. V našej implementácii najprv spracuje obrázky po zarovnaní a potom vytvorí mapu zmien v prekrytej oblasti. Ak nie sú dostupné potrebné knižnice alebo model, program automaticky použije klasický CV fallback, aby analýza mohla pokračovať.
+ChangeFormer je metóda založená na porovnaní dvojice snímok pomocou transformerových príznakov. V našej implementácii najprv spracuje obrázky po zarovnaní a potom vytvorí mapu zmien v prekrytej oblasti. 
 
 Pri tréningu ChangeFormer sme používali dvojice pred a po spolu s binárnymi maskami odstráneného odpadu z vlastného datasetu \cite{changeformer2021}. Dáta sa delili na tréningovú a validačnú časť, vstupy sa menili na fixnú veľkosť a počas učenia sa používali aj augmentácie, aby model lepšie zvládal zmeny uhla záberu a osvetlenia. Optimalizácia prebiehala cez AdamW a loss funkcia kombinovala BCEWithLogitsLoss s Dice loss.
 
@@ -142,9 +142,9 @@ Výsledkom je mapa zmeny, preview obrázok a súbor metrík, medzi ktoré patrí
 \end{figure}
 
 \section{EfficientNet}
-EfficientNet používame ako pomocný klasifikačný model pre odhad čistého a znečisteného stavu \cite{tan2019efficientnet}. Model dostane dvojicu záberov, vyhodnotí pravdepodobnosť triedy ``dirty'' pre prednú aj zadnú snímku a z týchto hodnôt vypočíta skóre vyčistenia. Ak nie je dostupný natrénovaný checkpoint, runner použije náhradný spôsob odhadu.
+EfficientNet používame ako pomocný klasifikačný model pre odhad čistého a znečisteného stavu \cite{tan2019efficientnet}. Model dostane dvojicu záberov, vyhodnotí pravdepodobnosť triedy ``dirty'' pre obe snímky a z týchto hodnôt vypočíta skóre vyčistenia.
 
-Pri tréningu EfficientNet sme binárny dataset tried clean a dirty zostavili z našich pripravených párov pred a po vyčistení a doplnili ho o cropy z TACO. Každý obrázok sa pri tréningu aj inferencii mení na viacero výrezov, aby model nehodnotil iba jeden bod v snímke, ale aj lokálne oblasti so zvyšným odpadom. Z jednotlivých cropov sa potom vypočíta pravdepodobnosť triedy dirty a finálna hodnota sa zloží ako vážená kombinácia priemeru a maxima cropov:
+Pri tréningu EfficientNet je základom binárny dataset clean/dirty z našich pripravených párov pred a po vyčistení. Každý obrázok sa pri tréningu aj inferencii mení na viacero výrezov, aby model nehodnotil iba jeden bod v snímke, ale aj lokálne oblasti so zvyšným odpadom. Z jednotlivých cropov sa potom vypočíta pravdepodobnosť triedy dirty a finálna hodnota sa zloží ako vážená kombinácia priemeru a maxima cropov:
 $$
 p_{dirty} = \mathrm{clip}(\alpha \cdot \max(p_i) + (1 - \alpha) \cdot \mathrm{mean}(p_i), 0, 1),
 $$
@@ -152,7 +152,7 @@ pričom $p_i$ sú dirty pravdepodobnosti jednotlivých cropov a $\alpha$ je váh
 $$
 \mathrm{cleanup\_score} = \mathrm{clip}(p_{dirty}^{before} - p_{dirty}^{after}, 0, 1),
 $$
-čiže vyjadruje, o koľko klesla pravdepodobnosť znečistenia po vyčistení. V tréningu sa používali výrazné obrazové augmentácie, CrossEntropyLoss s váhami tried, optimalizátor AdamW a rozvrh učenia CosineAnnealingLR.
+čiže vyjadruje, o koľko klesla pravdepodobnosť znečistenia po vyčistení. V tréningu sa používali výrazné obrazové augmentácie, CrossEntropyLoss s váhami tried, optimalizátor AdamW.
 
 Táto metóda je vhodná na rýchle porovnanie dvoch stavov miesta a na získanie jednoduchého číselného skóre, ktoré dopĺňa segmentačné a change-detection výstupy. Obrázok \ref{fig:efficientnet} zobrazuje príklad výsledku v aplikácii.
 
@@ -174,7 +174,7 @@ Táto vetva je užitočná najmä v situáciách, kde chceme mať jednoduchý a 
 \end{figure}
 
 \section{Kvantitatívne vyhodnotenie}
-Tabuľka \ref{tab:mask_metrics} sumarizuje priemerné výsledky na 13 pároch s maskami. Pri metódach, ktoré v tomto exporte nevytvárajú priamo maskové metriky, je uvedený znak ``—''. Z pohľadu priestorového prekrytia vychádza najlepšie samotný ChangeFormer. Siamese U-Net a SIFT + RANSAC dávajú použiteľné, ale slabšie výsledky než ChangeFormer, pričom YOLOv8-seg poskytuje hlavne dobrý odhad množstva, no v tomto reporte preň nie sú dostupné Dice a IoU.
+Tabuľka \ref{tab:mask_metrics} sumarizuje priemerné výsledky na 13 pároch s maskami. Pri metódach, ktoré v tomto exporte nevytvárajú priamo maskové metriky, je uvedený znak ``—''. Z pohľadu priestorového prekrytia vychádza najlepšie Siamese U-Net, zatiaľ čo YOLOv8-seg zostáva najsilnejší v odhade množstva odpadu. ChangeFormer a SIFT + RANSAC fungujú ako interpretovateľné referenčné prístupy, ale s nižším maskovým prekrytím než Siamese U-Net.
 
 \begin{table*}[!t]
 \centering
@@ -185,19 +185,19 @@ Tabuľka \ref{tab:mask_metrics} sumarizuje priemerné výsledky na 13 pároch s 
 \hline
 Metóda & Dice $\uparrow$ & IoU $\uparrow$ & MAE $\downarrow$ [px] & MAPE $\downarrow$ [\%] & Poznámka \\
 \hline
-ChangeFormer & \textbf{0.199} & \textbf{0.128} & 87976.273 & 110.445 & najlepšie prekrytie masky \\
+ChangeFormer & 0.177 & 0.129 & 69579.200 & 76.260 & silný change-detection baseline \\
 DINOv2 & — & — & — & — & bez maskových metrík v tomto exporte \\
 EfficientNet & — & — & — & — & bez maskových metrík v tomto exporte \\
-Siamese U-Net & 0.191 & 0.117 & 256632.000 & 717.415 & maskový baseline, silné nadhodnotenie \\
-YOLOv8-seg & — & — & 34602.769 & 59.022 & množstvo odhaduje dobre, Dice/IoU nie sú dostupné \\
-SIFT + RANSAC & 0.135 & 0.082 & 251414.385 & 342.194 & klasický interpretovateľný baseline \\
+Siamese U-Net & \textbf{0.244} & \textbf{0.147} & 229115.556 & 935.924 & najlepšie prekrytie masky \\
+YOLOv8-seg & — & — & \textbf{34602.769} & \textbf{59.022} & množstvo odhaduje dobre, Dice/IoU nie sú dostupné \\
+SIFT + RANSAC & 0.155 & 0.092 & 92179.615 & 233.398 & klasický interpretovateľný baseline \\
 \hline
 \end{tabular}%
 }
 \end{table*}
 
 \section{Diskusia}
-Výsledky ukazujú, že jednotlivé metódy riešia úlohu z rôznych uhlov pohľadu, preto ich nemožno čítať iba cez jednu metriku. ChangeFormer dosahuje najlepšie priestorové prekrytie masky, a preto je v našej práci najsilnejším kandidátom tam, kde je dôležité presne lokalizovať oblasť zmeny. Siamese U-Net a SIFT + RANSAC fungujú ako použiteľné referenčné prístupy, ale ich priemerné prekrytie je nižšie a výsledky sú viac závislé od kvality zarovnania.
+Výsledky ukazujú, že jednotlivé metódy riešia úlohu z rôznych uhlov pohľadu, preto ich nemožno čítať iba cez jednu metriku. Siamese U-Net dosahuje najlepšie priestorové prekrytie masky, zatiaľ čo YOLOv8-seg je najsilnejší pri odhade množstva odpadu. ChangeFormer a SIFT + RANSAC fungujú ako použiteľné referenčné prístupy, ale ich priemerné prekrytie je nižšie a výsledky sú viac závislé od kvality zarovnania.
 
 YOLOv8-seg sa v tomto projekte javí ako praktická metóda pre odhad množstva odpadu a pre rýchlu vizuálnu kontrolu, no v aktuálnom exporte pre ňu nemáme priamo dostupné maskové metriky Dice a IoU. DINOv2 a EfficientNet zase nepatria medzi čisté segmentačné prístupy, preto sú vhodné skôr ako doplnkové signály pre posúdenie stavu scény než ako priama náhrada za change detection. Z pohľadu celého riešenia je preto najdôležitejšie, že máme viacero metód s odlišným typom výstupu: presnú masku zmeny, odhad množstva a klasifikačné skóre čistoty.
 
@@ -213,7 +213,7 @@ Treba tiež zdôrazniť, že všetky metódy neprodukujú rovnaký typ výstupu.
 \section{Záver}
 V práci sme navrhli a implementovali systém na analýzu dvojíc fotografií pred a po čistiacej akcii, ktorý spája zarovnanie snímok, viacero metód detekcie zmien a grafické používateľské rozhranie. Vytvorili sme aj vlastnú dátovú sadu párov a doplnili ju o ručne pripravené masky pre časť scenárov, aby bolo možné metódy porovnávať na spoločnom základe.
 
-Na základe realizovaných experimentov sa ukázalo, že najlepšie maskové prekrytie dosahuje ChangeFormer, zatiaľ čo YOLOv8-seg a EfficientNet sú užitočné skôr ako doplnkové vetvy pre odhad množstva odpadu a čistoty scény. SIFT + RANSAC a Siamese U-Net poskytujú zrozumiteľné referenčné výsledky, ale ich kvalita závisí najmä od zarovnania a od charakteru scény. DINOv2 sa v riešení uplatnil ako silný reprezentančný základ a ako zdroj doplnkového signálu pre robustnejšie hodnotenie.
+Na základe realizovaných experimentov sa ukázalo, že najlepšie maskové prekrytie dosahuje Siamese U-Net, zatiaľ čo YOLOv8-seg je najsilnejší pri odhade množstva odpadu. ChangeFormer a SIFT + RANSAC poskytujú zrozumiteľné referenčné výsledky, ale ich kvalita závisí najmä od zarovnania a od charakteru scény. DINOv2 sa v riešení uplatnil ako silný reprezentančný základ a ako zdroj doplnkového signálu pre robustnejšie hodnotenie.
 
 Celkový prínos práce spočíva v tom, že vznikla porovnávacia platforma, ktorá umožňuje analyzovať rovnakú dvojicu snímok viacerými prístupmi a interpretovať výsledok z pohľadu segmentácie, odhadu množstva aj klasifikácie. Ďalší vývoj by mal smerovať najmä k rozšíreniu ručne anotovaných dát, zlepšeniu vyhodnotenia na väčšom počte scén a k presnejšiemu kalibrovaniu metrík pre jednotlivé typy modelov.
 
