@@ -32,3 +32,4 @@ results/training/
 .github/copilot-instructions.md
 README.md
 __init__.py
+metrics/

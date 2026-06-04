@@ -27,7 +27,7 @@ class SiameseDinoV2Runner:
         threshold: float | None = None,
         weights_path: str | Path | None = None,
         dino_backbone_name: str | None = None,
-        dino_input_size: int | None = None,
+        dino_input_size: int = 1120,
         fusion_alpha_siamese: float = 0.62,
         hint_gamma: float = 1.6,
     ):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -8,11 +9,13 @@ import numpy as np
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
+    from ..utils.io_utils import pair_folder_name
     from .changeformer import ChangeformerRunner
     from .dinov2_cd import DinoV2CdRunner
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
+    from utils.io_utils import pair_folder_name
     from method_scripts.changeformer import ChangeformerRunner
     from method_scripts.dinov2_cd import DinoV2CdRunner
 
@@ -28,9 +31,9 @@ class ChangeformerDinoV2Runner:
         threshold_percentile: float | None = None,
         weights_path: str | Path | None = None,
         dino_backbone_name: str | None = None,
-        dino_input_size: int | None = None,
+        dino_input_size: int = 1120,
         fusion_alpha_changeformer: float = 0.82,
-        dino_gate_percentile: float = 78.0,
+        dino_gate_percentile: float = 71.0,
     ):
         self.method_id = method_id
         self.spec = get_method_spec(method_id)
@@ -110,12 +113,11 @@ class ChangeformerDinoV2Runner:
         if overlap_mask is not None:
             fused_mask = cv2.bitwise_and(fused_mask, (overlap_mask > 0).astype(np.uint8) * 255)
 
-        artifact_dir = None
-        if cf_result.preview_image_path is not None:
-            artifact_dir = Path(cf_result.preview_image_path).parent
-        if artifact_dir is None or not artifact_dir.exists():
-            artifact_dir = Path(__file__).resolve().parent.parent.parent / "results"
-            artifact_dir.mkdir(parents=True, exist_ok=True)
+        results_root = Path(__file__).resolve().parent.parent.parent / "results"
+        safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = pair_folder_name(before, after)
+        artifact_dir = results_root / self.method_id / f"{safe_stamp}__{folder_name}"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
 
         fused_prob_u8 = (fused_prob * 255.0).astype(np.uint8)
         fused_prob_path = artifact_dir / "fused_probability_map.png"

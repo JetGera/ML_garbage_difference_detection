@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from datetime import datetime
@@ -100,10 +101,13 @@ def _save_outputs(payload: dict[str, Any], json_path: Path, csv_path: Path) -> N
     latest_csv_path.write_text(csv_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def collect_metrics_incremental() -> dict[str, Any]:
+def collect_metrics_incremental(max_pairs: int | None = None) -> dict[str, Any]:
     pairs, skipped_pairs = discover_pairs()
     if not pairs:
         raise RuntimeError(f"No valid before/after/mask pairs found under {DEFAULT_DATASET_ROOT}")
+
+    if max_pairs is not None:
+        pairs = pairs[:max_pairs]
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -262,4 +266,7 @@ def collect_metrics_incremental() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    collect_metrics_incremental()
+    parser = argparse.ArgumentParser(description="Collect live method metrics")
+    parser.add_argument("--max-pairs", type=int, default=None, help="Limit the number of pairs to process")
+    args = parser.parse_args()
+    collect_metrics_incremental(max_pairs=args.max_pairs)

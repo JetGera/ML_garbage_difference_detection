@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -28,13 +29,16 @@ except Exception:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
-    from ..utils.io_utils import prepare_pair_output_dir, save_artifact_images
+    from ..utils.io_utils import pair_folder_name, save_artifact_images
     from ..utils.viz_utils import annotate_panel, compose_panel_grid
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
-    from utils.io_utils import prepare_pair_output_dir, save_artifact_images
+    from utils.io_utils import pair_folder_name, save_artifact_images
     from utils.viz_utils import annotate_panel, compose_panel_grid
+
+
+DEFAULT_EFFICIENTNET_WEIGHTS_PATH = Path(__file__).resolve().parent.parent.parent / "weights" / "efficientnet_best.pt"
 
 
 EFFICIENTNET_CLS_CONFIG = {
@@ -42,6 +46,8 @@ EFFICIENTNET_CLS_CONFIG = {
     "model_name": "efficientnet_b0",
     # Optional environment variable with path to a trained binary checkpoint.
     "weights_env_var": "EFFICIENTNET_CLS_WEIGHTS",
+    # Default checkpoint shipped with the project.
+    "default_weights_path": DEFAULT_EFFICIENTNET_WEIGHTS_PATH,
     # Input side used for inference preprocessing.
     "input_size": 224,
     # ImageNet normalization constants.
@@ -102,6 +108,8 @@ class EfficientNetClsRunner:
             self.weights_path = Path(weights_path)
         elif env_weights_path:
             self.weights_path = Path(env_weights_path)
+        elif Path(EFFICIENTNET_CLS_CONFIG["default_weights_path"]).exists():
+            self.weights_path = Path(EFFICIENTNET_CLS_CONFIG["default_weights_path"])
         else:
             self.weights_path = None
         self.dirty_threshold = float(dirty_threshold or EFFICIENTNET_CLS_CONFIG["dirty_threshold"])
@@ -147,7 +155,11 @@ class EfficientNetClsRunner:
         after_overlay = self._build_score_overlay(after_img, after_pred, title="After")
         preview = self._compose_preview(before_img, after_img, before_overlay, after_overlay, diff_preview)
 
-        output_dir = prepare_pair_output_dir(Path(__file__).resolve().parent.parent.parent / "results", before, after, self.label)
+        results_root = Path(__file__).resolve().parent.parent.parent / "results"
+        safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = pair_folder_name(before, after)
+        output_dir = results_root / self.method_id / f"{safe_stamp}__{folder_name}"
+        output_dir.mkdir(parents=True, exist_ok=True)
         artifacts = save_artifact_images(
             output_dir,
             {

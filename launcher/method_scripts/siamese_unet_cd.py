@@ -181,7 +181,7 @@ class SiameseUnetCdRunner:
     def __init__(
         self,
         method_id: str,
-        device: str = "auto",
+        device: str = "cuda",
         force_cpu: bool = False,
         input_size: int | None = None,
         threshold: float | None = None,
@@ -582,8 +582,13 @@ class SiameseUnetCdRunner:
 
     def _prepare_output_dir(self, before: Path, after: Path) -> Path:
         safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        token = uuid4().hex[:8]
-        output_dir = Path(__file__).resolve().parent.parent.parent / "results" / "analysis" / self.method_id / f"{safe_stamp}__{before.stem}__{after.stem}__{token}"
+        folder_name = before.parent.name or before.stem
+        output_dir = (
+            Path(__file__).resolve().parent.parent.parent
+            / "results"
+            / self.method_id
+            / f"{safe_stamp}__{folder_name}"
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
 

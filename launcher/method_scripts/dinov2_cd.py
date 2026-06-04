@@ -40,10 +40,12 @@ except Exception as exc:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
+    from ..utils.io_utils import sanitize_folder_component
     from ..utils.viz_utils import blend_with_alpha
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
+    from utils.io_utils import sanitize_folder_component
     from utils.viz_utils import blend_with_alpha
 
 
@@ -54,7 +56,9 @@ DINOV2_CD_CONFIG = {
         "dinov2_vitb14",
         "dinov2_vits14",
     ),
-    "input_size": 518,
+    "input_size": 1120,
+    "dynamic_img_size": True,
+    "dynamic_img_pad": True,
     "semantic_threshold_percentile": 85.0,
     "colormap": cv2.COLORMAP_TURBO,
     "overlay_alpha": 0.60,
@@ -383,7 +387,15 @@ class DinoV2CdRunner:
 
         for candidate in candidates:
             try:
-                model = timm.create_model(candidate, pretrained=True, num_classes=0, global_pool="")
+                model = timm.create_model(
+                    candidate,
+                    pretrained=True,
+                    num_classes=0,
+                    global_pool="",
+                    img_size=int(self.input_size),
+                    dynamic_img_size=bool(DINOV2_CD_CONFIG.get("dynamic_img_size", True)),
+                    dynamic_img_pad=bool(DINOV2_CD_CONFIG.get("dynamic_img_pad", True)),
+                )
                 self.backbone_name = candidate
                 break
             except Exception as exc:
@@ -603,11 +615,10 @@ class DinoV2CdRunner:
 
     def _prepare_output_dir(self, before_path: Path, after_path: Path) -> Path:
         results_root = Path(__file__).resolve().parent.parent.parent / "results"
-        method_slug = self._slugify(self.label)
-        timestamp = datetime.now().strftime("%d.%m.%Y %H-%M")
-        run_id = uuid4().hex[:6]
-        folder_name = f"{self.method_id}__{method_slug}__{timestamp}__{run_id}"
-        output_dir = results_root / folder_name
+        safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = before_path.parent.name or before_path.stem
+        folder_name = sanitize_folder_component(folder_name)
+        output_dir = results_root / self.method_id / f"{safe_stamp}__{folder_name}"
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
 

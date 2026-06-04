@@ -1,0 +1,31 @@
+{
+  "source_checkpoint": "C:\\Coding\\AI\\projekt\\training\\siamese_unet_cd\\20260524_214423__siamese_unet_cd__18ddf37c\\best.pt",
+  "canonical_checkpoint": "C:\\Coding\\AI\\projekt\\weights\\siamese_unet_cd_best.pt",
+  "updated_at": "2026-05-24T22:22:11",
+  "metadata": {
+    "index_csv": "C:\\Coding\\AI\\projekt\\datasets\\custom\\cd_pairs_masks_for_training\\index.csv",
+    "output_dir": "C:\\Coding\\AI\\projekt\\training\\siamese_unet_cd\\20260524_214423__siamese_unet_cd__18ddf37c",
+    "train_count": 41,
+    "val_count": 4,
+    "positive_pixels_train": 3215163,
+    "negative_pixels_train": 357941803,
+    "pos_weight": 25.0,
+    "image_size": 512,
+    "device": "cuda",
+    "val_metrics": {
+      "accuracy": 0.9870138168334961,
+      "precision": 0.6483457844183564,
+      "recall": 0.5872402126631223,
+      "f1": 0.616282018767436,
+      "iou": 0.44538123167155425,
+      "dice": 0.6162820187674359,
+      "tp": 10935.0,
+      "tn": 1024024.0,
+      "fp": 5931.0,
+      "fn": 7686.0
+    },
+    "best_epoch": 104,
+    "best_f1": 0.616282018767436,
+    "best_iou": 0.44538123167155425
+  }
+}

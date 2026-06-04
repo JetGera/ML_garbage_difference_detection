@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 import sys
 from pathlib import Path
 from time import perf_counter
@@ -30,12 +31,12 @@ except Exception as exc:
 try:
     from ..core import AnalysisResult
     from ..methods import get_method_spec
-    from ..utils.io_utils import pair_folder_name, prepare_output_dir, write_image
+    from ..utils.io_utils import pair_folder_name, write_image
     from ..utils.viz_utils import annotate_panel, resize_if_too_large
 except ImportError:
     from core import AnalysisResult
     from methods import get_method_spec
-    from utils.io_utils import pair_folder_name, prepare_output_dir, write_image
+    from utils.io_utils import pair_folder_name, write_image
     from utils.viz_utils import annotate_panel, resize_if_too_large
 
 CHANGEFORMER_CONFIG = {
@@ -46,7 +47,7 @@ CHANGEFORMER_CONFIG = {
         # Optional env var that points to a supervised ChangeFormer checkpoint.
         "weights_env_var": "CHANGEFORMER_WEIGHTS",
         # Canonical checkpoint path used by the GUI when a trained model exists.
-        "canonical_weights_path": "weights/changeformer.pt",
+        "canonical_weights_path": "weights/changeformer_best.pt",
         # Decoder width used by the supervised segmentation model.
         "decoder_channels": 128,
         # Side length for transformer inference.
@@ -418,7 +419,11 @@ class ChangeformerRunner:
             preview_use_before_only=preview_use_before_only,
         )
 
-        output_dir = prepare_output_dir(Path(__file__).resolve().parent.parent.parent / "results", pair_folder_name(before, after), self.label)
+        results_root = Path(__file__).resolve().parent.parent.parent / "results"
+        safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = pair_folder_name(before, after)
+        output_dir = results_root / self.method_id / f"{safe_stamp}__{folder_name}"
+        output_dir.mkdir(parents=True, exist_ok=True)
         artifacts = self._save_artifacts(
             output_dir=output_dir,
             aligned_before=aligned_before,

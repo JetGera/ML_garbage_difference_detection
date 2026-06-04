@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -887,9 +888,12 @@ class SiftRansacRunner:
 		return overlay
 
 	def _prepare_output_dir(self, before: Path, after: Path) -> Path:
-		root = Path(__file__).resolve().parent.parent.parent / "results"
+		results_root = Path(__file__).resolve().parent.parent.parent / "results"
+		safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 		pair_name = pair_folder_name(before, after)
-		return prepare_output_dir(root, pair_name, self.label)
+		output_dir = results_root / self.method_id / f"{safe_stamp}__{pair_name}"
+		output_dir.mkdir(parents=True, exist_ok=True)
+		return output_dir
 
 	def _save_artifacts(
 		self,

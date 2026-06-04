@@ -40,7 +40,7 @@ YOLOV8_SEG_CONFIG = {
 	"model_name": Path(__file__).resolve().parent.parent.parent / "weights" / "yolov8m_trash_finetuned.pt",
 
 	# Default fine-tuned checkpoint for trash segmentation.
-	"weights_path": Path(__file__).resolve().parent.parent.parent / "weights" / "yolov8_seg_best.pt",
+	"weights_path": Path(__file__).resolve().parent.parent.parent / "weights" / "yolov8m_seg_best_new+fine-tune.pt",
 	
 	# Root folder with the TACO dataset and its exported YOLO data.
 	"dataset_root": Path(__file__).resolve().parent.parent.parent / "datasets" / "TACO",
@@ -1014,12 +1014,10 @@ class YoloV8SegRunner:
 		)
 
 	def _prepare_output_dir(self, before: Path, after: Path) -> Path:
-		root = Path(__file__).resolve().parent.parent.parent / "results"
+		results_root = Path(__file__).resolve().parent.parent.parent / "results"
+		safe_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 		pair_name = self._pair_folder_name(before, after)
-		method_name = self._sanitize_folder_component(self.label)
-		timestamp = datetime.now().strftime("%d.%m.%Y %H-%M")
-		run_dir_name = f"{pair_name}__{method_name}__{timestamp}__{uuid4().hex[:6]}"
-		output_dir = root / run_dir_name
+		output_dir = results_root / self.method_id / f"{safe_stamp}__{pair_name}"
 		output_dir.mkdir(parents=True, exist_ok=True)
 		return output_dir
 
